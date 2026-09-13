@@ -1,0 +1,11 @@
+{
+  "artboards": [
+    { "file": "Main.dc.html", "x": 0, "y": 0, "w": 1280, "h": 800 },
+    { "file": "Mobile.dc.html", "x": 1360, "y": 0, "w": 390, "h": 844 }
+  ],
+  "annotations": [
+    { "id": "note-main", "x": 0, "y": -90, "w": 460, "text": "Desktop/lab computer: one question at a time + side navigator with answered/flagged states, review screen before submit." },
+    { "id": "note-mobile", "x": 1360, "y": -90, "w": 360, "text": "Phone variant: same flow, navigator collapses into a tap-to-expand overlay." }
+  ],
+  "launch": { "view": "focused", "file": "Main.dc.html" }
+}

@@ -1,0 +1,19 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    environment:
+      BACKEND_HOST: backend
+      BACKEND_PORT: "8000"
+    depends_on:
+      - backend
+    restart: unless-stopped

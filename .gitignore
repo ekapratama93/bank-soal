@@ -1,0 +1,87 @@
+# --- Python ---
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+sdist/
+wheels/
+*.egg-info/
+*.egg
+.eggs/
+pip-wheel-metadata/
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Testing / coverage
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.hypothesis/
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+.dmypy_stat
+
+# Ruff / linting caches
+.ruff_cache/
+
+# Type checkers
+.pytype/
+.pyre/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# celery
+celerybeat-schedule
+celerybeat.pid
+
+# Local dev / logs
+*.log
+*.pot
+pip-log.txt
+pip-delete-this-directory.txt
+
+# --- Environment / secrets ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- Node (frontend) ---
+node_modules/
+dist/
+.vite/
+.turbo/
+.parcel-cache/
+.eslintcache
+
+# --- Databases / uploads ---
+*.sqlite3
+*.db
+media/
+uploads/
+
+# --- OS / Editors ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
