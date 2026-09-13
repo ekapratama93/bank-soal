@@ -166,7 +166,7 @@ Karena root directory sudah diatur di file tersebut, Railway tidak mencoba mem-b
 
 6. Buat domain publik untuk tiap service (dashboard → Settings → Networking → Generate Domain, atau `railway domain`).
 
-Setelah jalan, frontend mem-proxy `/api` ke backend lewat private networking (`BACKEND_HOST` = `backend.RAILWAY_PRIVATE_DOMAIN`), sehingga tidak perlu mengatur CORS. Mengubah konfigurasi service cukup edit `.railway/railway.ts`, lalu `railway config plan` dan `railway config apply`.
+Setelah jalan, frontend mem-proxy `/api` ke backend lewat private networking (`BACKEND_HOST` = `${{backend.RAILWAY_PRIVATE_DOMAIN}}`), sehingga tidak perlu mengatur CORS. Alternatif bila private network tidak dipakai: beri domain publik ke backend, lalu set di service frontend `BACKEND_HOST=<domain-backend>.up.railway.app`, `BACKEND_PORT=443`, `BACKEND_SCHEME=https`. Mengubah konfigurasi service cukup edit `.railway/railway.ts`, lalu `railway config plan` dan `railway config apply`.
 
 ## Catatan
 

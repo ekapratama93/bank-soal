@@ -6,9 +6,10 @@ server {
     index index.html;
 
     location /api {
-        proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};
+        proxy_pass ${BACKEND_SCHEME}://${BACKEND_HOST}:${BACKEND_PORT};
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_ssl_server_name on;
         proxy_read_timeout 300s;
         proxy_send_timeout 300s;
     }
