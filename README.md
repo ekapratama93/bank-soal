@@ -115,7 +115,58 @@ docker compose up --build
 
 Frontend di http://localhost:8080; nginx mem-proxy `/api` ke backend sehingga CORS tidak diperlukan.
 
-**Railway/Render**: hubungkan repo, deploy `backend/` dan `frontend/` sebagai dua service. Backend: set env `PORT`. Frontend: set env `BACKEND_HOST` (host/URL backend) dan `BACKEND_PORT` — konfigurasi nginx di-render otomatis dari `frontend/nginx.conf.template`.
+**Render**: hubungkan repo, deploy `backend/` dan `frontend/` sebagai dua service. Backend: set env `PORT`. Frontend: set env `BACKEND_HOST` (host/URL backend) dan `BACKEND_PORT` — konfigurasi nginx di-render otomatis dari `frontend/nginx.conf.template`.
+
+## Deployment (Railway)
+
+Konfigurasi Railway disimpan sebagai **Infrastructure as Code** di `.railway/railway.ts` — satu file yang mendefinisikan dua service dari repo ini:
+
+- **`backend`** — root directory `backend/`, build via `backend/Dockerfile`, healthcheck `/api/health`
+- **`frontend`** — root directory `frontend/`, build Dockerfile nginx; `BACKEND_HOST` otomatis mengarah ke backend lewat private networking Railway, `BACKEND_PORT` mengikuti port backend
+
+Karena root directory sudah diatur di file tersebut, Railway tidak mencoba mem-build repo root (sumber error "Railpack could not determine how to build the app").
+
+### Langkah deploy
+
+1. Install Railway CLI dan login:
+
+   ```bash
+   npm i -g @railway/cli   # atau: brew install railway
+   railway login
+   ```
+
+2. Buat proyek Railway baru, atau hubungkan proyek yang sudah ada:
+
+   ```bash
+   railway init     # proyek baru
+   # atau: railway link
+   ```
+
+3. Pasang dependensi IaC di root repo (sekali saja; `railway` SDK), lalu pratinjau dan terapkan konfigurasi:
+
+   ```bash
+   npm install
+   railway config plan    # cek rencana perubahan
+   railway config apply   # buat service backend + frontend
+   ```
+
+   Bila sebelumnya ada service lama yang dibuat manual (root = root repo), apply akan menandainya untuk dihapus — itu wajar; konfirmasi jika setuju, atau hapus manual di dashboard sebelum apply.
+
+4. Isi variabel rahasia service `backend` (sekali saja):
+
+   ```bash
+   railway variable set OPENROUTER_API_KEY=xxx -s backend
+   railway variable set SUPABASE_URL=https://xxxxx.supabase.co -s backend
+   railway variable set SUPABASE_SERVICE_KEY=xxx -s backend
+   ```
+
+   atau lewat dashboard → service **backend** → tab Variables.
+
+5. Deploy: `git push` ke GitHub (branch `main`) — kedua service otomatis ter-build dan ter-deploy dari `railway.ts` di atas. Alternatif tanpa push: `railway up -s <nama-service>` dari folder `backend/` atau `frontend/`.
+
+6. Buat domain publik untuk tiap service (dashboard → Settings → Networking → Generate Domain, atau `railway domain`).
+
+Setelah jalan, frontend mem-proxy `/api` ke backend lewat private networking (`BACKEND_HOST` = `backend.RAILWAY_PRIVATE_DOMAIN`), sehingga tidak perlu mengatur CORS. Mengubah konfigurasi service cukup edit `.railway/railway.ts`, lalu `railway config plan` dan `railway config apply`.
 
 ## Catatan
 

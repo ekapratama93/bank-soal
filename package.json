@@ -1,0 +1,13 @@
+{
+  "name": "bank-soal",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Aplikasi pembuat soal latihan sekolah dengan bantuan AI (OpenRouter). Siswa memilih mata pelajaran + kelas + tipe ujian, aplikasi menyajikan paket soal campuran (pilihan ganda, benar/salah, isian), timer countdown, penilaian otomatis + koreksi AI untuk soal isian, dan riwayat hasil tersimpan di browser.",
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:ekapratama93/bank-soal.git"
+  },
+  "dependencies": {
+    "railway": "^3.11.0"
+  }
+}
