@@ -95,6 +95,39 @@ export interface AvailableCombo {
   total: number;
 }
 
+export interface QuizPackage {
+  id: string;
+  subject: string;
+  grade: number;
+  exam_type_id: string;
+  exam_type: string;
+  jumlah_soal: number;
+  started: boolean;
+  durasi_menit: number | null;
+  batch_id: string | null;
+  created_at: string | null;
+}
+
+export interface AdminQuestion {
+  nomor: number;
+  tipe: QuestionType;
+  pertanyaan: string;
+  opsi?: string[];
+  jawaban: number | string;
+  pembahasan: string;
+  gambar?: string;
+}
+
+export interface QuizPackageDetail extends QuizPackage {
+  questions: AdminQuestion[];
+}
+
+export interface QuizPackageFilters {
+  subject?: string;
+  grade?: number;
+  exam_type_id?: string;
+}
+
 export class ApiError extends Error {}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -300,6 +333,36 @@ export function createExamType(
 
 export function deleteExamType(token: string, id: string): Promise<void> {
   return request(`/api/exam-types/${id}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export function getQuizPackages(
+  token: string,
+  filters: QuizPackageFilters = {}
+): Promise<QuizPackage[]> {
+  const params = new URLSearchParams();
+  if (filters.subject) params.set("subject", filters.subject);
+  if (filters.grade !== undefined) params.set("grade", String(filters.grade));
+  if (filters.exam_type_id) params.set("exam_type_id", filters.exam_type_id);
+  const qs = params.toString();
+  return request(`/api/quiz/admin/list${qs ? `?${qs}` : ""}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export function getQuizPackageDetail(
+  token: string,
+  id: string
+): Promise<QuizPackageDetail> {
+  return request(`/api/quiz/admin/quizzes/${id}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export function deleteQuizPackage(token: string, id: string): Promise<void> {
+  return request(`/api/quiz/admin/quizzes/${id}`, {
     method: "DELETE",
     headers: { Authorization: `Bearer ${token}` },
   });

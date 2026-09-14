@@ -372,6 +372,98 @@ def list_attempts(response: Response, request: Request):
     ]
 
 
+# ============================================================
+# Manajemen kuis (admin) — daftar, detail lengkap, hapus paket
+# ============================================================
+
+
+@router.get("/admin/list")
+def admin_list_quizzes(
+    subject: str | None = None,
+    grade: int | None = None,
+    exam_type_id: str | None = None,
+    admin: dict = Depends(require_admin),
+):
+    """Admin: daftar semua paket soal (metadata saja, tanpa isi soal)."""
+    sb = get_supabase()
+    query = sb.table("quizzes").select("*").order("created_at", desc=True)
+    if subject:
+        query = query.eq("subject", subject)
+    if grade is not None:
+        query = query.eq("grade", grade)
+    if exam_type_id:
+        query = query.eq("exam_type_id", exam_type_id)
+    quizzes = query.execute().data or []
+    names = {
+        t["id"]: t["name"]
+        for t in (sb.table("exam_types").select("id, name").execute().data or [])
+    }
+    return [
+        {
+            "id": q["id"],
+            "subject": q["subject"],
+            "grade": q["grade"],
+            "exam_type_id": q["exam_type_id"],
+            "exam_type": names.get(q["exam_type_id"], ""),
+            "jumlah_soal": len(q.get("questions") or []),
+            "started": bool(q.get("started")),
+            "durasi_menit": q.get("durasi_menit"),
+            "batch_id": q.get("batch_id"),
+            "created_at": q.get("created_at"),
+        }
+        for q in quizzes
+    ]
+
+
+@router.get("/admin/quizzes/{quiz_id}")
+def admin_get_quiz(quiz_id: str, admin: dict = Depends(require_admin)):
+    """Admin: detail paket lengkap — termasuk kunci jawaban & pembahasan."""
+    sb = get_supabase()
+    res = sb.table("quizzes").select("*").eq("id", quiz_id).execute()
+    if not res.data:
+        raise HTTPException(status_code=404, detail="Paket soal tidak ditemukan")
+    quiz = res.data[0]
+    row = _exam_type_row(sb, quiz)
+    questions = []
+    for i, q in enumerate(quiz["questions"]):
+        item = {
+            "nomor": i + 1,
+            "tipe": q["tipe"],
+            "pertanyaan": q["pertanyaan"],
+            "jawaban": q["jawaban"],
+            "pembahasan": q.get("pembahasan", ""),
+        }
+        if q["tipe"] == "pilihan_ganda":
+            item["opsi"] = q["opsi"]
+        if q.get("gambar"):
+            item["gambar"] = q["gambar"]
+        questions.append(item)
+    return {
+        "id": quiz["id"],
+        "subject": quiz["subject"],
+        "grade": quiz["grade"],
+        "exam_type_id": quiz["exam_type_id"],
+        "exam_type": (row or {}).get("name", ""),
+        "durasi_menit": quiz.get("durasi_menit"),
+        "started": bool(quiz.get("started")),
+        "batch_id": quiz.get("batch_id"),
+        "created_at": quiz.get("created_at"),
+        "questions": questions,
+    }
+
+
+@router.delete("/admin/quizzes/{quiz_id}", status_code=204)
+def admin_delete_quiz(quiz_id: str, admin: dict = Depends(require_admin)):
+    """Admin: hapus satu paket soal. Riwayat pengerjaan paket ini ikut terhapus."""
+    sb = get_supabase()
+    res = sb.table("quizzes").select("id").eq("id", quiz_id).execute()
+    if not res.data:
+        raise HTTPException(status_code=404, detail="Paket soal tidak ditemukan")
+    sb.table("attempts").delete().eq("quiz_id", quiz_id).execute()
+    sb.table("quizzes").delete().eq("id", quiz_id).execute()
+    return None
+
+
 @router.get("/{quiz_id}")
 def get_quiz(quiz_id: str, response: Response, request: Request):
     sb = get_supabase()

@@ -6,9 +6,12 @@ import {
   createSubject,
   deleteExamType,
   deleteMaterial,
+  deleteQuizPackage,
   deleteSubject,
   getExamTypes,
   getMaterials,
+  getQuizPackageDetail,
+  getQuizPackages,
   getSubjects,
   loginAdmin,
   generateBatch,
@@ -17,11 +20,14 @@ import {
   uploadMaterial,
   type ExamType,
   type Material,
+  type QuizPackage,
+  type QuizPackageDetail as QuizPackageDetailData,
   type Subject,
   type TipeSoalConfig,
 } from "../api/client";
 import { GRADES } from "../subjects";
 import { QUESTION_TYPE_OPTIONS } from "@/lib/questionTypes";
+import { formatDate } from "../storage/results";
 import {
   Card,
   CardContent,
@@ -50,11 +56,13 @@ import {
   CheckCircle2,
   Clock,
   Coins,
+  Eye,
   FileText,
   Hash,
   Layers,
   ListChecks,
   LogOut,
+  Package,
   Pencil,
   RefreshCw,
   ShieldCheck,
@@ -62,6 +70,7 @@ import {
   Trash2,
   type LucideIcon,
 } from "lucide-react";
+import QuizPackageDetail from "@/components/QuizPackageDetail";
 
 function StatCard({
   icon: Icon,
@@ -157,6 +166,93 @@ export default function Admin() {
   const [editTitle, setEditTitle] = useState("");
   const [editContent, setEditContent] = useState("");
   const [editError, setEditError] = useState<string | null>(null);
+
+  const [quizzes, setQuizzes] = useState<QuizPackage[]>([]);
+  const [qmSubject, setQmSubject] = useState<string>("all");
+  const [qmGrade, setQmGrade] = useState<string>("all");
+  const [qmExamTypeId, setQmExamTypeId] = useState<string>("all");
+  const [qmLoading, setQmLoading] = useState(false);
+  const [qmError, setQmError] = useState<string | null>(null);
+  const [qmMessage, setQmMessage] = useState<string | null>(null);
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const [detailData, setDetailData] = useState<QuizPackageDetailData | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+
+  function quizFilters() {
+    return {
+      subject: qmSubject !== "all" ? qmSubject : undefined,
+      grade: qmGrade !== "all" ? Number(qmGrade) : undefined,
+      exam_type_id: qmExamTypeId !== "all" ? qmExamTypeId : undefined,
+    };
+  }
+
+  function loadQuizzes(tok: string) {
+    setQmLoading(true);
+    getQuizPackages(tok, quizFilters())
+      .then((rows) => {
+        setQuizzes(rows);
+        setQmError(null);
+      })
+      .catch((e) => {
+        if (e instanceof ApiError && (e.message.includes("login") || e.message.includes("admin"))) {
+          localStorage.removeItem(TOKEN_KEY);
+          setToken(null);
+        }
+        setQmError(e instanceof ApiError ? e.message : "Gagal memuat paket soal.");
+      })
+      .finally(() => setQmLoading(false));
+  }
+
+  useEffect(() => {
+    if (token) loadQuizzes(token);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, qmSubject, qmGrade, qmExamTypeId]);
+
+  async function handleViewQuiz(id: string) {
+    if (!token) return;
+    if (detailId === id) {
+      setDetailId(null);
+      setDetailData(null);
+      setDetailError(null);
+      return;
+    }
+    setDetailId(id);
+    setDetailData(null);
+    setDetailError(null);
+    setDetailLoading(true);
+    try {
+      setDetailData(await getQuizPackageDetail(token, id));
+    } catch (e) {
+      setDetailError(e instanceof ApiError ? e.message : "Gagal memuat detail paket.");
+      setDetailId(null);
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  async function handleDeleteQuiz(q: QuizPackage) {
+    if (!token) return;
+    const confirmed = window.confirm(
+      q.started
+        ? "Paket ini sudah pernah dibuka siswa. Menghapusnya juga menghapus riwayat pengerjaan terkait. Hapus paket ini?"
+        : "Hapus paket soal ini?"
+    );
+    if (!confirmed) return;
+    setQmError(null);
+    setQmMessage(null);
+    try {
+      await deleteQuizPackage(token, q.id);
+      setQuizzes((prev) => prev.filter((x) => x.id !== q.id));
+      if (detailId === q.id) {
+        setDetailId(null);
+        setDetailData(null);
+      }
+      setQmMessage("Paket soal dihapus.");
+    } catch (e) {
+      setQmError(e instanceof ApiError ? e.message : "Gagal menghapus paket soal.");
+    }
+  }
 
   function loadAll(tok: string) {
     getSubjects()
@@ -505,6 +601,10 @@ export default function Admin() {
           <TabsTrigger value="pool">
             <RefreshCw className="size-4" />
             Pool
+          </TabsTrigger>
+          <TabsTrigger value="kuis">
+            <Package className="size-4" />
+            Kuis
           </TabsTrigger>
         </TabsList>
 
@@ -1097,6 +1197,189 @@ export default function Admin() {
                   Reset Pool
                 </Button>
               </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="kuis" className="flex flex-col gap-4">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2 text-primary">
+                <Package className="size-6" />
+                <CardTitle className="text-2xl">Kelola Kuis (Paket Soal)</CardTitle>
+              </div>
+              <CardDescription>
+                Semua paket soal yang sudah di-generate, termasuk yang sudah dibuka
+                siswa. Lihat isi soal beserta kunci jawaban &amp; pembahasan, atau hapus
+                paket individual tanpa mengganggu paket lain.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="qm-subject">Mata Pelajaran</Label>
+                  <Select value={qmSubject} onValueChange={setQmSubject}>
+                    <SelectTrigger id="qm-subject">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Semua</SelectItem>
+                      {subjects.map((s) => (
+                        <SelectItem key={s.id} value={s.name}>
+                          {s.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="qm-grade">Kelas</Label>
+                  <Select value={qmGrade} onValueChange={setQmGrade}>
+                    <SelectTrigger id="qm-grade">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Semua</SelectItem>
+                      {GRADES.map((g) => (
+                        <SelectItem key={g} value={String(g)}>
+                          Kelas {g}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="qm-exam-type">Tipe Ujian</Label>
+                  <Select value={qmExamTypeId} onValueChange={setQmExamTypeId}>
+                    <SelectTrigger id="qm-exam-type">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Semua</SelectItem>
+                      {examTypes.map((t) => (
+                        <SelectItem key={t.id} value={t.id}>
+                          {t.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              {qmError && (
+                <Alert variant="destructive">
+                  <AlertTriangle />
+                  <AlertDescription>{qmError}</AlertDescription>
+                </Alert>
+              )}
+              {qmMessage && (
+                <Alert variant="success">
+                  <CheckCircle2 />
+                  <AlertDescription>{qmMessage}</AlertDescription>
+                </Alert>
+              )}
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-muted-foreground text-sm">
+                  {quizzes.length} paket soal
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={qmLoading || !token}
+                  onClick={() => token && loadQuizzes(token)}
+                >
+                  <RefreshCw />
+                  Muat Ulang
+                </Button>
+              </div>
+              {quizzes.length === 0 ? (
+                <EmptyState
+                  icon={Package}
+                  text={
+                    qmLoading
+                      ? "Memuat paket soal…"
+                      : "Belum ada paket soal. Generate dulu di tab Pool."
+                  }
+                />
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {quizzes.map((q) => (
+                    <div key={q.id} className="flex flex-col gap-2">
+                      <div className="border-border/60 flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3">
+                        <div className="flex min-w-0 items-center gap-3">
+                          <span className="bg-secondary text-primary flex size-9 shrink-0 items-center justify-center rounded-full">
+                            <Package className="size-4" />
+                          </span>
+                          <div className="min-w-0">
+                            <strong className="font-bold">
+                              {q.subject} · Kelas {q.grade}
+                            </strong>
+                            <div className="mt-1.5 flex flex-wrap gap-1.5">
+                              <Badge variant="secondary">{q.exam_type || "-"}</Badge>
+                              <Badge variant="secondary">
+                                <Hash />
+                                {q.jumlah_soal} soal
+                              </Badge>
+                              <Badge variant="secondary">
+                                <Clock />
+                                {q.durasi_menit ? `${q.durasi_menit} menit` : "ikut kelas"}
+                              </Badge>
+                              <Badge variant={q.started ? "default" : "outline"}>
+                                {q.started ? "Sudah dibuka" : "Belum dimulai"}
+                              </Badge>
+                              {q.created_at && (
+                                <Badge variant="outline">
+                                  {formatDate(q.created_at)}
+                                </Badge>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => void handleViewQuiz(q.id)}
+                            disabled={detailLoading && detailId !== q.id}
+                          >
+                            <Eye />
+                            {detailId === q.id ? "Tutup" : "Lihat"}
+                          </Button>
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => void handleDeleteQuiz(q)}
+                          >
+                            <Trash2 />
+                            Hapus
+                          </Button>
+                        </div>
+                      </div>
+                      {detailId === q.id && (
+                        <div className="flex flex-col gap-2 rounded-xl border border-dashed px-4 py-3.5">
+                          {detailLoading && (
+                            <p className="text-muted-foreground text-sm">Memuat detail…</p>
+                          )}
+                          {detailError && (
+                            <Alert variant="destructive">
+                              <AlertTriangle />
+                              <AlertDescription>{detailError}</AlertDescription>
+                            </Alert>
+                          )}
+                          {detailData && (
+                            <>
+                              <p className="text-muted-foreground text-xs">
+                                Kunci jawaban &amp; pembahasan hanya terlihat di sini (admin)
+                                — tidak pernah dikirim ke siswa sebelum kuis dikumpulkan.
+                              </p>
+                              <QuizPackageDetail questions={detailData.questions} />
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

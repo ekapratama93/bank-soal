@@ -843,6 +843,118 @@ class TestResolveImages:
         assert len(with_image) == quiz_router.IMAGE_CAP_PER_PAKET
 
 
+class TestQuizManagement:
+    """Admin mengelola paket soal: daftar, detail lengkap, hapus."""
+
+    def test_list_requires_admin(self, client, sb):
+        res = client.get("/api/quiz/admin/list")
+        assert res.status_code == 401
+
+    def test_list_returns_metadata(self, client, sb, admin_auth, admin_headers):
+        exam_type_fixture(sb)
+        insert_quiz(sb, "quiz-2")
+        insert_quiz(sb, "quiz-1")
+        sb.tables["quizzes"][0]["created_at"] = "2026-01-02T00:00:00+00:00"
+        sb.tables["quizzes"][1]["created_at"] = "2026-01-01T00:00:00+00:00"
+        res = client.get("/api/quiz/admin/list", headers=admin_headers)
+        assert res.status_code == 200
+        rows = res.json()
+        assert [r["id"] for r in rows] == ["quiz-2", "quiz-1"]
+        assert rows[0]["subject"] == "Matematika"
+        assert rows[0]["grade"] == 3
+        assert rows[0]["exam_type"] == "Ujian Harian"
+        assert rows[0]["jumlah_soal"] == 3
+        assert rows[0]["started"] is False
+        assert rows[0]["durasi_menit"] == 60
+        # metadata saja — isi soal tidak dikirim di daftar
+        assert "questions" not in rows[0]
+
+    def test_list_filters(self, client, sb, admin_auth, admin_headers):
+        exam_type_fixture(sb)
+        sb.tables["exam_types"].append(
+            {"id": "et-2", "name": "Ujian Semester", "jumlah_soal": None, "durasi_menit": None}
+        )
+        insert_quiz(sb, "quiz-1")
+        sb.tables["quizzes"][0]["created_at"] = "2026-01-01T00:00:00+00:00"
+        insert_quiz(sb, "quiz-2", exam_type_id="et-2")
+        sb.tables["quizzes"][1]["created_at"] = "2026-01-02T00:00:00+00:00"
+        sb.tables["quizzes"][1]["subject"] = "IPA"
+        sb.tables["quizzes"][1]["grade"] = 5
+
+        res = client.get("/api/quiz/admin/list", headers=admin_headers)
+        assert len(res.json()) == 2
+
+        res = client.get("/api/quiz/admin/list?subject=IPA", headers=admin_headers)
+        assert [r["id"] for r in res.json()] == ["quiz-2"]
+
+        res = client.get("/api/quiz/admin/list?grade=3", headers=admin_headers)
+        assert [r["id"] for r in res.json()] == ["quiz-1"]
+
+        res = client.get(
+            "/api/quiz/admin/list?exam_type_id=et-2", headers=admin_headers
+        )
+        assert [r["id"] for r in res.json()] == ["quiz-2"]
+
+    def test_detail_includes_answers(self, client, sb, admin_auth, admin_headers):
+        exam_type_fixture(sb)
+        insert_quiz(sb, "quiz-123")
+        res = client.get("/api/quiz/admin/quizzes/quiz-123", headers=admin_headers)
+        assert res.status_code == 200
+        body = res.json()
+        assert body["exam_type"] == "Ujian Harian"
+        assert body["subject"] == "Matematika"
+        qs = body["questions"]
+        assert [q["nomor"] for q in qs] == [1, 2, 3]
+        assert qs[0]["jawaban"] == 1
+        assert qs[0]["opsi"] == ["3", "4", "5", "6"]
+        assert qs[0]["pembahasan"] == "2 + 2 = 4"
+        assert qs[1]["jawaban"] == "benar"
+        assert qs[2]["jawaban"] == "Jakarta"
+        assert "jawaban" in qs[0] and "pembahasan" in qs[0]
+
+    def test_detail_requires_admin(self, client, sb):
+        res = client.get("/api/quiz/admin/quizzes/quiz-1")
+        assert res.status_code == 401
+
+    def test_detail_not_found(self, client, sb, admin_auth, admin_headers):
+        res = client.get("/api/quiz/admin/quizzes/tidak-ada", headers=admin_headers)
+        assert res.status_code == 404
+
+    def test_delete_removes_quiz_and_attempts(self, client, sb, admin_auth, admin_headers):
+        exam_type_fixture(sb)
+        insert_quiz(sb, "quiz-123", started=True)
+        opened = client.get("/api/quiz/quiz-123")
+        assert opened.status_code == 200
+        assert sb.tables["attempts"]
+
+        res = client.delete(
+            "/api/quiz/admin/quizzes/quiz-123", headers=admin_headers
+        )
+        assert res.status_code == 204
+        assert sb.tables["quizzes"] == []
+        assert sb.tables["attempts"] == []
+
+    def test_delete_unstarted_quiz(self, client, sb, admin_auth, admin_headers):
+        exam_type_fixture(sb)
+        insert_quiz(sb, "quiz-1")
+        res = client.delete(
+            "/api/quiz/admin/quizzes/quiz-1", headers=admin_headers
+        )
+        assert res.status_code == 204
+        assert sb.tables["quizzes"] == []
+        assert sb.tables.get("attempts", []) == []
+
+    def test_delete_not_found(self, client, sb, admin_auth, admin_headers):
+        res = client.delete(
+            "/api/quiz/admin/quizzes/tidak-ada", headers=admin_headers
+        )
+        assert res.status_code == 404
+
+    def test_delete_requires_admin(self, client, sb):
+        res = client.delete("/api/quiz/admin/quizzes/quiz-1")
+        assert res.status_code == 401
+
+
 class TestPoolReset:
     def test_reset_deletes_only_unstarted(self, client, sb, admin_auth, admin_headers):
         exam_type_fixture(sb)
