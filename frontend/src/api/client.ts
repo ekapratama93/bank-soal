@@ -118,6 +118,15 @@ export interface AdminQuestion {
   gambar?: string;
 }
 
+export interface AdminQuestionInput {
+  tipe: QuestionType;
+  pertanyaan: string;
+  opsi?: string[];
+  jawaban: number | string;
+  pembahasan: string;
+  gambar?: string;
+}
+
 export interface QuizPackageDetail extends QuizPackage {
   questions: AdminQuestion[];
 }
@@ -365,5 +374,20 @@ export function deleteQuizPackage(token: string, id: string): Promise<void> {
   return request(`/api/quiz/admin/quizzes/${id}`, {
     method: "DELETE",
     headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export function updateQuizPackage(
+  token: string,
+  id: string,
+  questions: AdminQuestionInput[]
+): Promise<QuizPackageDetail> {
+  return request(`/api/quiz/admin/quizzes/${id}`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ questions }),
   });
 }

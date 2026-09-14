@@ -17,9 +17,13 @@ import {
   generateBatch,
   resetPool,
   updateMaterial,
+  updateQuizPackage,
   uploadMaterial,
+  type AdminQuestion,
+  type AdminQuestionInput,
   type ExamType,
   type Material,
+  type QuestionType,
   type QuizPackage,
   type QuizPackageDetail as QuizPackageDetailData,
   type Subject,
@@ -64,6 +68,7 @@ import {
   LogOut,
   Package,
   Pencil,
+  Plus,
   RefreshCw,
   ShieldCheck,
   Sparkles,
@@ -71,6 +76,35 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import QuizPackageDetail from "@/components/QuizPackageDetail";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+
+const OPTION_LETTERS = ["A", "B", "C", "D"];
+
+interface EditableQuestion {
+  tipe: QuestionType;
+  pertanyaan: string;
+  opsi: string[];
+  jawabanPg: number;
+  jawabanBs: "benar" | "salah";
+  jawabanTeks: string;
+  pembahasan: string;
+  gambar?: string;
+}
+
+function toEditableQuestion(q: AdminQuestion): EditableQuestion {
+  return {
+    tipe: q.tipe,
+    pertanyaan: q.pertanyaan,
+    opsi: q.opsi ? [...q.opsi] : ["", "", "", ""],
+    jawabanPg:
+      q.tipe === "pilihan_ganda" && typeof q.jawaban === "number" ? q.jawaban : 0,
+    jawabanBs: q.jawaban === "salah" ? "salah" : "benar",
+    jawabanTeks:
+      q.tipe === "isian" || q.tipe === "deskripsi" ? String(q.jawaban) : "",
+    pembahasan: q.pembahasan,
+    ...(q.gambar ? { gambar: q.gambar } : {}),
+  };
+}
 
 function StatCard({
   icon: Icon,
@@ -178,6 +212,10 @@ export default function Admin() {
   const [detailData, setDetailData] = useState<QuizPackageDetailData | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [editingQuiz, setEditingQuiz] = useState(false);
+  const [editQuestions, setEditQuestions] = useState<EditableQuestion[]>([]);
+  const [savingQuiz, setSavingQuiz] = useState(false);
+  const [editQuizError, setEditQuizError] = useState<string | null>(null);
 
   function quizFilters() {
     return {
@@ -215,11 +253,15 @@ export default function Admin() {
       setDetailId(null);
       setDetailData(null);
       setDetailError(null);
+      setEditingQuiz(false);
+      setEditQuizError(null);
       return;
     }
     setDetailId(id);
     setDetailData(null);
     setDetailError(null);
+    setEditingQuiz(false);
+    setEditQuizError(null);
     setDetailLoading(true);
     try {
       setDetailData(await getQuizPackageDetail(token, id));
@@ -251,6 +293,107 @@ export default function Admin() {
       setQmMessage("Paket soal dihapus.");
     } catch (e) {
       setQmError(e instanceof ApiError ? e.message : "Gagal menghapus paket soal.");
+    }
+  }
+
+  function patchEditQuestion(i: number, patch: Partial<EditableQuestion>) {
+    setEditQuestions((prev) =>
+      prev.map((q, idx) => (idx === i ? { ...q, ...patch } : q))
+    );
+  }
+
+  function patchEditOpsi(i: number, oi: number, value: string) {
+    setEditQuestions((prev) =>
+      prev.map((q, idx) =>
+        idx === i ? { ...q, opsi: q.opsi.map((o, j) => (j === oi ? value : o)) } : q
+      )
+    );
+  }
+
+  function changeEditTipe(i: number, tipe: QuestionType) {
+    setEditQuestions((prev) =>
+      prev.map((q, idx) => {
+        if (idx !== i) return q;
+        if (tipe === "pilihan_ganda") {
+          const opsi = [...q.opsi];
+          while (opsi.length < 4) opsi.push("");
+          return { ...q, tipe, opsi, jawabanPg: q.jawabanPg % 4 };
+        }
+        return { ...q, tipe };
+      })
+    );
+  }
+
+  function addEditQuestion() {
+    setEditQuestions((prev) => [
+      ...prev,
+      {
+        tipe: "pilihan_ganda",
+        pertanyaan: "",
+        opsi: ["", "", "", ""],
+        jawabanPg: 0,
+        jawabanBs: "benar",
+        jawabanTeks: "",
+        pembahasan: "",
+      },
+    ]);
+  }
+
+  async function saveQuizEdit() {
+    if (!token || !detailData) return;
+    for (let i = 0; i < editQuestions.length; i++) {
+      const q = editQuestions[i];
+      const no = i + 1;
+      if (!q.pertanyaan.trim() || !q.pembahasan.trim()) {
+        setEditQuizError(`Soal ${no}: pertanyaan/pembahasan kosong`);
+        return;
+      }
+      if (
+        q.tipe === "pilihan_ganda" &&
+        (q.opsi.length !== 4 || q.opsi.some((o) => !o.trim()))
+      ) {
+        setEditQuizError(`Soal ${no}: opsi harus 4 item dan tidak kosong`);
+        return;
+      }
+      if ((q.tipe === "isian" || q.tipe === "deskripsi") && !q.jawabanTeks.trim()) {
+        setEditQuizError(`Soal ${no}: kunci jawaban kosong`);
+        return;
+      }
+    }
+    if (detailData.started) {
+      const ok = window.confirm(
+        "Paket ini sudah pernah dibuka siswa. Soal yang diubah berlaku untuk pengerjaan berikutnya. Lanjutkan?"
+      );
+      if (!ok) return;
+    }
+    setSavingQuiz(true);
+    setEditQuizError(null);
+    try {
+      const payload: AdminQuestionInput[] = editQuestions.map((q): AdminQuestionInput => {
+        const shared = {
+          tipe: q.tipe,
+          pertanyaan: q.pertanyaan.trim(),
+          pembahasan: q.pembahasan.trim(),
+          ...(q.gambar ? { gambar: q.gambar } : {}),
+        };
+        if (q.tipe === "pilihan_ganda") {
+          return { ...shared, opsi: q.opsi, jawaban: q.jawabanPg };
+        }
+        if (q.tipe === "benar_salah") {
+          return { ...shared, jawaban: q.jawabanBs };
+        }
+        return { ...shared, jawaban: q.jawabanTeks.trim() };
+      });
+      const updated = await updateQuizPackage(token, detailData.id, payload);
+      setDetailData(updated);
+      setEditingQuiz(false);
+      setQmError(null);
+      setQmMessage("Paket soal berhasil diperbarui.");
+      loadQuizzes(token);
+    } catch (e) {
+      setEditQuizError(e instanceof ApiError ? e.message : "Gagal menyimpan perubahan.");
+    } finally {
+      setSavingQuiz(false);
     }
   }
 
@@ -1365,14 +1508,209 @@ export default function Admin() {
                               <AlertDescription>{detailError}</AlertDescription>
                             </Alert>
                           )}
-                          {detailData && (
+                          {detailData && !editingQuiz && (
                             <>
-                              <p className="text-muted-foreground text-xs">
-                                Kunci jawaban &amp; pembahasan hanya terlihat di sini (admin)
-                                — tidak pernah dikirim ke siswa sebelum kuis dikumpulkan.
-                              </p>
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <p className="text-muted-foreground text-xs">
+                                  Kunci jawaban &amp; pembahasan hanya terlihat di sini (admin)
+                                  — tidak pernah dikirim ke siswa sebelum kuis dikumpulkan.
+                                </p>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => {
+                                    setEditQuestions(
+                                      detailData.questions.map(toEditableQuestion)
+                                    );
+                                    setEditQuizError(null);
+                                    setEditingQuiz(true);
+                                  }}
+                                >
+                                  <Pencil />
+                                  Edit Soal
+                                </Button>
+                              </div>
                               <QuizPackageDetail questions={detailData.questions} />
                             </>
+                          )}
+                          {detailData && editingQuiz && (
+                            <div className="flex flex-col gap-3">
+                              <p className="text-muted-foreground text-xs">
+                                Perbaiki soal hasil AI: ubah pertanyaan, opsi, kunci jawaban,
+                                atau pembahasan; ubah tipe soal; hapus soal; atau tambah soal baru.
+                                Perubahan berlaku untuk pengerjaan berikutnya.
+                              </p>
+                              {editQuizError && (
+                                <Alert variant="destructive">
+                                  <AlertTriangle />
+                                  <AlertDescription>{editQuizError}</AlertDescription>
+                                </Alert>
+                              )}
+                              {editQuestions.map((eq, i) => (
+                                <div
+                                  key={i}
+                                  className="border-border/60 flex flex-col gap-2 rounded-xl border px-4 py-3.5"
+                                >
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div className="flex items-center gap-2">
+                                      <Badge variant="secondary">Soal {i + 1}</Badge>
+                                      <Select
+                                        value={eq.tipe}
+                                        onValueChange={(v) => changeEditTipe(i, v as QuestionType)}
+                                      >
+                                        <SelectTrigger className="h-8 w-fit text-xs">
+                                          <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          {QUESTION_TYPE_OPTIONS.map((o) => (
+                                            <SelectItem key={o.key} value={o.key}>
+                                              {o.label}
+                                            </SelectItem>
+                                          ))}
+                                        </SelectContent>
+                                      </Select>
+                                    </div>
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="text-destructive"
+                                      onClick={() =>
+                                        setEditQuestions((prev) => prev.filter((_, idx) => idx !== i))
+                                      }
+                                    >
+                                      <Trash2 />
+                                      Hapus Soal
+                                    </Button>
+                                  </div>
+                                  {eq.gambar && (
+                                    <p className="text-muted-foreground text-xs">
+                                      Soal ini punya gambar — gambar tidak diubah dari sini.
+                                    </p>
+                                  )}
+                                  <div className="flex flex-col gap-1.5">
+                                    <Label
+                                      htmlFor={`eq-pertanyaan-${detailData.id}-${i}`}
+                                      className="text-xs"
+                                    >
+                                      Pertanyaan
+                                    </Label>
+                                    <Textarea
+                                      id={`eq-pertanyaan-${detailData.id}-${i}`}
+                                      dir="auto"
+                                      value={eq.pertanyaan}
+                                      onChange={(e) =>
+                                        patchEditQuestion(i, { pertanyaan: e.target.value })
+                                      }
+                                    />
+                                  </div>
+                                  {eq.tipe === "pilihan_ganda" && (
+                                    <div className="flex flex-col gap-1.5">
+                                      <Label className="text-xs">
+                                        Opsi — klik radio untuk menandai jawaban benar
+                                      </Label>
+                                      <RadioGroup
+                                        value={String(eq.jawabanPg)}
+                                        onValueChange={(v) =>
+                                          patchEditQuestion(i, { jawabanPg: Number(v) })
+                                        }
+                                        className="gap-2"
+                                      >
+                                        {eq.opsi.map((opt, oi) => (
+                                          <div key={oi} className="flex items-center gap-2.5">
+                                            <RadioGroupItem value={String(oi)} />
+                                            <Input
+                                              value={opt}
+                                              onChange={(e) => patchEditOpsi(i, oi, e.target.value)}
+                                              placeholder={`Opsi ${OPTION_LETTERS[oi]}`}
+                                              className="h-9"
+                                            />
+                                          </div>
+                                        ))}
+                                      </RadioGroup>
+                                    </div>
+                                  )}
+                                  {eq.tipe === "benar_salah" && (
+                                    <div className="flex flex-col gap-1.5">
+                                      <Label className="text-xs">Kunci Jawaban</Label>
+                                      <Select
+                                        value={eq.jawabanBs}
+                                        onValueChange={(v) =>
+                                          patchEditQuestion(i, {
+                                            jawabanBs: v as "benar" | "salah",
+                                          })
+                                        }
+                                      >
+                                        <SelectTrigger className="w-fit">
+                                          <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          <SelectItem value="benar">Benar</SelectItem>
+                                          <SelectItem value="salah">Salah</SelectItem>
+                                        </SelectContent>
+                                      </Select>
+                                    </div>
+                                  )}
+                                  {(eq.tipe === "isian" || eq.tipe === "deskripsi") && (
+                                    <div className="flex flex-col gap-1.5">
+                                      <Label
+                                        htmlFor={`eq-jawaban-${detailData.id}-${i}`}
+                                        className="text-xs"
+                                      >
+                                        Kunci Jawaban
+                                      </Label>
+                                      <Textarea
+                                        id={`eq-jawaban-${detailData.id}-${i}`}
+                                        dir="auto"
+                                        value={eq.jawabanTeks}
+                                        rows={eq.tipe === "deskripsi" ? 4 : 1}
+                                        onChange={(e) =>
+                                          patchEditQuestion(i, { jawabanTeks: e.target.value })
+                                        }
+                                      />
+                                    </div>
+                                  )}
+                                  <div className="flex flex-col gap-1.5">
+                                    <Label
+                                      htmlFor={`eq-pembahasan-${detailData.id}-${i}`}
+                                      className="text-xs"
+                                    >
+                                      Pembahasan
+                                    </Label>
+                                    <Textarea
+                                      id={`eq-pembahasan-${detailData.id}-${i}`}
+                                      dir="auto"
+                                      value={eq.pembahasan}
+                                      onChange={(e) =>
+                                        patchEditQuestion(i, { pembahasan: e.target.value })
+                                      }
+                                    />
+                                  </div>
+                                </div>
+                              ))}
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Button variant="outline" size="sm" onClick={addEditQuestion}>
+                                  <Plus />
+                                  Tambah Soal
+                                </Button>
+                                <Button
+                                  onClick={() => void saveQuizEdit()}
+                                  disabled={savingQuiz || editQuestions.length === 0}
+                                >
+                                  <CheckCircle2 />
+                                  {savingQuiz ? "Menyimpan…" : "Simpan Perubahan"}
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  onClick={() => {
+                                    setEditingQuiz(false);
+                                    setEditQuizError(null);
+                                  }}
+                                  disabled={savingQuiz}
+                                >
+                                  Batal
+                                </Button>
+                              </div>
+                            </div>
                           )}
                         </div>
                       )}

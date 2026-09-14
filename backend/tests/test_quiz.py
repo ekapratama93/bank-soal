@@ -954,6 +954,274 @@ class TestQuizManagement:
         res = client.delete("/api/quiz/admin/quizzes/quiz-1")
         assert res.status_code == 401
 
+    def test_edit_replaces_questions(self, client, sb, admin_auth, admin_headers):
+        exam_type_fixture(sb)
+        insert_quiz(sb, "quiz-123")
+        questions = [
+            {
+                "tipe": "pilihan_ganda",
+                "pertanyaan": "Hasil 3 × 3 adalah?",
+                "opsi": ["6", "8", "9", "12"],
+                "jawaban": 2,
+                "pembahasan": "3 × 3 = 9.",
+            },
+            {
+                "tipe": "isian",
+                "pertanyaan": "Proklamasi RI dilakukan tahun?",
+                "jawaban": "1945",
+                "pembahasan": "Proklamasi 17 Agustus 1945.",
+            },
+        ]
+        res = client.patch(
+            "/api/quiz/admin/quizzes/quiz-123",
+            json={"questions": questions},
+            headers=admin_headers,
+        )
+        assert res.status_code == 200
+        body = res.json()
+        assert [q["nomor"] for q in body["questions"]] == [1, 2]
+        stored = sb.tables["quizzes"][0]["questions"]
+        assert stored[0]["jawaban"] == 2
+        assert stored[1]["jawaban"] == "1945"  # string angka tetap string
+        assert "opsi" not in stored[1]
+        assert "nomor" not in stored[0]
+
+    def test_edit_updates_list_jumlah_soal(self, client, sb, admin_auth, admin_headers):
+        exam_type_fixture(sb)
+        insert_quiz(sb, "quiz-123")
+        questions = [
+            {
+                "tipe": "benar_salah",
+                "pertanyaan": "Air mendidih pada 100 derajat Celsius.",
+                "jawaban": "benar",
+                "pembahasan": "Ya.",
+            }
+        ]
+        res = client.patch(
+            "/api/quiz/admin/quizzes/quiz-123",
+            json={"questions": questions},
+            headers=admin_headers,
+        )
+        assert res.status_code == 200
+        listing = client.get("/api/quiz/admin/list", headers=admin_headers).json()
+        assert listing[0]["jumlah_soal"] == 1
+
+    def test_edit_keeps_gambar(self, client, sb, admin_auth, admin_headers):
+        exam_type_fixture(sb)
+        quiz = insert_quiz(sb, "quiz-123")
+        quiz["questions"][0]["gambar"] = "http://img/x.png"
+        res = client.patch(
+            "/api/quiz/admin/quizzes/quiz-123",
+            json={"questions": copy.deepcopy(quiz["questions"])},
+            headers=admin_headers,
+        )
+        assert res.status_code == 200
+        assert res.json()["questions"][0]["gambar"] == "http://img/x.png"
+        assert sb.tables["quizzes"][0]["questions"][0]["gambar"] == "http://img/x.png"
+
+    def test_edit_requires_admin(self, client, sb):
+        res = client.patch(
+            "/api/quiz/admin/quizzes/quiz-1", json={"questions": []}
+        )
+        assert res.status_code == 401
+
+    def test_edit_not_found(self, client, sb, admin_auth, admin_headers):
+        res = client.patch(
+            "/api/quiz/admin/quizzes/tidak-ada",
+            json={"questions": []},
+            headers=admin_headers,
+        )
+        assert res.status_code == 404
+
+    def test_edit_empty_questions_422(self, client, sb, admin_auth, admin_headers):
+        exam_type_fixture(sb)
+        insert_quiz(sb, "quiz-123")
+        res = client.patch(
+            "/api/quiz/admin/quizzes/quiz-123",
+            json={"questions": []},
+            headers=admin_headers,
+        )
+        assert res.status_code == 422
+
+    def test_edit_invalid_tipe_422(self, client, sb, admin_auth, admin_headers):
+        exam_type_fixture(sb)
+        insert_quiz(sb, "quiz-123")
+        res = client.patch(
+            "/api/quiz/admin/quizzes/quiz-123",
+            json={"questions": [{"tipe": "aneh", "pertanyaan": "?", "jawaban": "x", "pembahasan": "y"}]},
+            headers=admin_headers,
+        )
+        assert res.status_code == 422
+        assert "tipe tidak valid" in res.json()["detail"]
+
+    def test_edit_pg_bad_index_422(self, client, sb, admin_auth, admin_headers):
+        exam_type_fixture(sb)
+        insert_quiz(sb, "quiz-123")
+        res = client.patch(
+            "/api/quiz/admin/quizzes/quiz-123",
+            json={
+                "questions": [
+                    {
+                        "tipe": "pilihan_ganda",
+                        "pertanyaan": "2+2?",
+                        "opsi": ["3", "4", "5", "6"],
+                        "jawaban": 7,
+                        "pembahasan": "4",
+                    }
+                ]
+            },
+            headers=admin_headers,
+        )
+        assert res.status_code == 422
+
+    def test_edit_pg_wrong_opsi_count_422(self, client, sb, admin_auth, admin_headers):
+        exam_type_fixture(sb)
+        insert_quiz(sb, "quiz-123")
+        res = client.patch(
+            "/api/quiz/admin/quizzes/quiz-123",
+            json={
+                "questions": [
+                    {
+                        "tipe": "pilihan_ganda",
+                        "pertanyaan": "2+2?",
+                        "opsi": ["3", "4"],
+                        "jawaban": 1,
+                        "pembahasan": "4",
+                    }
+                ]
+            },
+            headers=admin_headers,
+        )
+        assert res.status_code == 422
+
+    def test_edit_pg_empty_option_422(self, client, sb, admin_auth, admin_headers):
+        exam_type_fixture(sb)
+        insert_quiz(sb, "quiz-123")
+        res = client.patch(
+            "/api/quiz/admin/quizzes/quiz-123",
+            json={
+                "questions": [
+                    {
+                        "tipe": "pilihan_ganda",
+                        "pertanyaan": "2+2?",
+                        "opsi": ["3", "4", " ", "6"],
+                        "jawaban": 1,
+                        "pembahasan": "4",
+                    }
+                ]
+            },
+            headers=admin_headers,
+        )
+        assert res.status_code == 422
+
+    def test_edit_bs_invalid_jawaban_422(self, client, sb, admin_auth, admin_headers):
+        exam_type_fixture(sb)
+        insert_quiz(sb, "quiz-123")
+        res = client.patch(
+            "/api/quiz/admin/quizzes/quiz-123",
+            json={
+                "questions": [
+                    {
+                        "tipe": "benar_salah",
+                        "pertanyaan": "Air mendidih pada 100 derajat.",
+                        "jawaban": "mungkin",
+                        "pembahasan": "Ya.",
+                    }
+                ]
+            },
+            headers=admin_headers,
+        )
+        assert res.status_code == 422
+
+    def test_edit_isian_empty_jawaban_422(self, client, sb, admin_auth, admin_headers):
+        exam_type_fixture(sb)
+        insert_quiz(sb, "quiz-123")
+        res = client.patch(
+            "/api/quiz/admin/quizzes/quiz-123",
+            json={
+                "questions": [
+                    {
+                        "tipe": "isian",
+                        "pertanyaan": "Ibukota RI?",
+                        "jawaban": "   ",
+                        "pembahasan": "Jakarta.",
+                    }
+                ]
+            },
+            headers=admin_headers,
+        )
+        assert res.status_code == 422
+
+    def test_edit_empty_pertanyaan_422(self, client, sb, admin_auth, admin_headers):
+        exam_type_fixture(sb)
+        insert_quiz(sb, "quiz-123")
+        res = client.patch(
+            "/api/quiz/admin/quizzes/quiz-123",
+            json={
+                "questions": [
+                    {
+                        "tipe": "isian",
+                        "pertanyaan": " ",
+                        "jawaban": "Jakarta",
+                        "pembahasan": "Jakarta.",
+                    }
+                ]
+            },
+            headers=admin_headers,
+        )
+        assert res.status_code == 422
+
+    def test_edit_empty_pembahasan_422(self, client, sb, admin_auth, admin_headers):
+        exam_type_fixture(sb)
+        insert_quiz(sb, "quiz-123")
+        res = client.patch(
+            "/api/quiz/admin/quizzes/quiz-123",
+            json={
+                "questions": [
+                    {
+                        "tipe": "isian",
+                        "pertanyaan": "Ibukota RI?",
+                        "jawaban": "Jakarta",
+                        "pembahasan": "",
+                    }
+                ]
+            },
+            headers=admin_headers,
+        )
+        assert res.status_code == 422
+
+    def test_edited_questions_still_gradeable(self, client, sb, admin_auth, admin_headers, monkeypatch):
+        """Soal hasil edit tetap bisa dikerjakan & dinilai siswa."""
+        exam_type_fixture(sb)
+        insert_quiz(sb, "quiz-123", started=True)
+        client.get("/api/quiz/quiz-123")
+        new_questions = [
+            {
+                "tipe": "pilihan_ganda",
+                "pertanyaan": "Hasil 5 × 5 adalah?",
+                "opsi": ["10", "20", "25", "30"],
+                "jawaban": 2,
+                "pembahasan": "5 × 5 = 25.",
+            }
+        ]
+        res = client.patch(
+            "/api/quiz/admin/quizzes/quiz-123",
+            json={"questions": new_questions},
+            headers=admin_headers,
+        )
+        assert res.status_code == 200
+
+        async def fake_grade(items):
+            return {}
+
+        monkeypatch.setattr(quiz_router, "grade_short_answers", fake_grade)
+        submit = client.post(
+            "/api/quiz/quiz-123/submit",
+            json={"answers": {"0": 2}},
+        )
+        assert submit.status_code == 200
+        assert submit.json()["nilai"] == 100
+
 
 class TestPoolReset:
     def test_reset_deletes_only_unstarted(self, client, sb, admin_auth, admin_headers):

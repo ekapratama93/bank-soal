@@ -422,7 +422,94 @@ def admin_get_quiz(quiz_id: str, admin: dict = Depends(require_admin)):
     res = sb.table("quizzes").select("*").eq("id", quiz_id).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="Paket soal tidak ditemukan")
-    quiz = res.data[0]
+    return _admin_quiz_payload(sb, res.data[0])
+
+
+VALID_TIPE_SOAL = ("pilihan_ganda", "benar_salah", "isian", "deskripsi")
+
+
+class AdminQuestionIn(BaseModel):
+    """Satu soal dari admin — jawaban diterima apa adanya (int/str), divalidasi manual."""
+
+    tipe: str
+    pertanyaan: str
+    opsi: list[str] | None = None
+    jawaban: object = None
+    pembahasan: str = ""
+    gambar: str | None = None
+
+
+class QuizUpdateRequest(BaseModel):
+    questions: list[AdminQuestionIn]
+
+
+def _validate_admin_questions(items: list[AdminQuestionIn]) -> list[dict]:
+    """Validasi soal hasil edit admin — aturan sama dengan generator AI (llm.py).
+    Mengembalikan daftar soal bersih siap simpan (tanpa nomor/gambar_tipe)."""
+    if not items:
+        raise HTTPException(
+            status_code=422, detail="Paket soal harus berisi minimal 1 soal"
+        )
+    cleaned: list[dict] = []
+    for i, item in enumerate(items, start=1):
+        tipe = item.tipe
+        if tipe not in VALID_TIPE_SOAL:
+            raise HTTPException(
+                status_code=422, detail=f"Soal {i}: tipe tidak valid: {tipe}"
+            )
+        pertanyaan = item.pertanyaan.strip()
+        pembahasan = item.pembahasan.strip()
+        if not pertanyaan or not pembahasan:
+            raise HTTPException(
+                status_code=422, detail=f"Soal {i}: pertanyaan/pembahasan kosong"
+            )
+        q: dict = {
+            "tipe": tipe,
+            "pertanyaan": pertanyaan,
+            "pembahasan": pembahasan,
+        }
+        if tipe == "pilihan_ganda":
+            opsi = item.opsi
+            if not isinstance(opsi, list) or len(opsi) != 4 or any(
+                not str(o).strip() for o in opsi
+            ):
+                raise HTTPException(
+                    status_code=422, detail=f"Soal {i}: opsi harus 4 item dan tidak kosong"
+                )
+            jawaban = item.jawaban
+            if isinstance(jawaban, bool) or not isinstance(jawaban, int):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Soal {i}: jawaban pilihan ganda harus indeks 0-3",
+                )
+            if not 0 <= jawaban <= 3:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Soal {i}: jawaban pilihan ganda harus indeks 0-3",
+                )
+            q["opsi"] = [str(o) for o in opsi]
+            q["jawaban"] = jawaban
+        elif tipe == "benar_salah":
+            if item.jawaban not in ("benar", "salah"):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Soal {i}: jawaban harus 'benar' atau 'salah'",
+                )
+            q["jawaban"] = item.jawaban
+        else:
+            jawaban = item.jawaban
+            if not isinstance(jawaban, str) or not jawaban.strip():
+                raise HTTPException(
+                    status_code=422, detail=f"Soal {i}: jawaban {tipe} kosong"
+                )
+            q["jawaban"] = jawaban.strip()
+        if item.gambar and isinstance(item.gambar, str):
+            q["gambar"] = item.gambar
+        cleaned.append(q)
+    return cleaned
+
+
+def _admin_quiz_payload(sb, quiz: dict) -> dict:
     row = _exam_type_row(sb, quiz)
     questions = []
     for i, q in enumerate(quiz["questions"]):
@@ -450,6 +537,22 @@ def admin_get_quiz(quiz_id: str, admin: dict = Depends(require_admin)):
         "created_at": quiz.get("created_at"),
         "questions": questions,
     }
+
+
+@router.patch("/admin/quizzes/{quiz_id}")
+def admin_update_quiz(
+    quiz_id: str, body: QuizUpdateRequest, admin: dict = Depends(require_admin)
+):
+    """Admin: perbaiki isi paket — ganti seluruh daftar soal dengan versi baru."""
+    sb = get_supabase()
+    res = sb.table("quizzes").select("*").eq("id", quiz_id).execute()
+    if not res.data:
+        raise HTTPException(status_code=404, detail="Paket soal tidak ditemukan")
+    quiz = res.data[0]
+    questions = _validate_admin_questions(body.questions)
+    sb.table("quizzes").update({"questions": questions}).eq("id", quiz_id).execute()
+    quiz["questions"] = questions
+    return _admin_quiz_payload(sb, quiz)
 
 
 @router.delete("/admin/quizzes/{quiz_id}", status_code=204)
