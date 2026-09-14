@@ -28,11 +28,24 @@ function readAll(): Record<string, QuizDraft> {
   }
 }
 
-function writeAll(drafts: Record<string, QuizDraft>): void {
+/** Hasil penyimpanan draf — pemanggil perlu tahu kalau jawaban tidak tersimpan. */
+export type DraftSaveResult = "ok" | "quota" | "unavailable";
+
+function isQuotaError(e: unknown): boolean {
+  return (
+    e instanceof DOMException &&
+    (e.name === "QuotaExceededError" ||
+      e.name === "NS_ERROR_DOM_QUOTA_REACHED" ||
+      e.code === 22)
+  );
+}
+
+function writeAll(drafts: Record<string, QuizDraft>): DraftSaveResult {
   try {
     localStorage.setItem(DRAFTS_KEY, JSON.stringify(drafts));
-  } catch {
-    // Storage penuh/tak tersedia — draf bersifat best-effort.
+    return "ok";
+  } catch (e) {
+    return isQuotaError(e) ? "quota" : "unavailable";
   }
 }
 
@@ -55,10 +68,13 @@ export function loadQuizDraft(quizId: string): QuizDraft | null {
   return draft ?? null;
 }
 
-export function saveQuizDraft(draft: QuizDraft): void {
+export function saveQuizDraft(draft: QuizDraft): DraftSaveResult {
   const drafts = readAll();
   drafts[draft.quizId] = draft;
-  writeAll(prune(drafts));
+  const result = writeAll(prune(drafts));
+  if (result !== "quota") return result;
+  // Penyimpanan penuh: korbankan draf lain demi ujian yang sedang dikerjakan.
+  return writeAll({ [draft.quizId]: draft });
 }
 
 export function clearQuizDraft(quizId: string): void {
@@ -80,4 +96,58 @@ export function getActiveDraft(): QuizDraft | null {
   );
   if (!active.length) return null;
   return active.sort((a, b) => b.savedAt - a.savedAt)[0];
+}
+
+/** Seberapa cocok draf tersimpan dengan attempt yang sedang dilayani server. */
+export type DraftMatch = "exact" | "near" | "stale";
+
+export interface ReconciledDraft {
+  match: DraftMatch;
+  answers: Record<string, number | string>;
+  flagged: Record<string, boolean>;
+  current: number;
+  phase: "exam" | "review";
+}
+
+/** Toleransi beda `expires_at` yang masih dianggap attempt yang sama. */
+const NEAR_MS = 60_000;
+
+/**
+ * Bandingkan draf tersimpan dengan `expires_at` dari server dan bersihkan isinya.
+ *
+ * Draf yang tidak cocok TIDAK dibuang diam-diam: dikembalikan dengan
+ * `match: "stale"` supaya siswa sendiri yang memutuskan memulihkannya.
+ */
+export function reconcileDraft(
+  draft: QuizDraft | null,
+  serverExpiresAt: number,
+  totalQuestions: number
+): ReconciledDraft | null {
+  if (!draft) return null;
+
+  const answers: Record<string, number | string> = {};
+  for (const [k, v] of Object.entries(draft.answers ?? {})) {
+    const idx = Number(k);
+    if (
+      Number.isInteger(idx) &&
+      idx >= 0 &&
+      idx < totalQuestions &&
+      v !== "" &&
+      v !== undefined &&
+      v !== null
+    ) {
+      answers[k] = v;
+    }
+  }
+
+  const diff = Math.abs(draft.expiresAt - serverExpiresAt);
+  const match: DraftMatch = diff === 0 ? "exact" : diff <= NEAR_MS ? "near" : "stale";
+
+  return {
+    match,
+    answers,
+    flagged: draft.flagged ?? {},
+    current: Math.max(0, Math.min(draft.current ?? 0, Math.max(0, totalQuestions - 1))),
+    phase: draft.phase === "review" ? "review" : "exam",
+  };
 }

@@ -1,3 +1,5 @@
+import { noteServerDateHeader } from "../lib/serverTime";
+
 export type QuestionType = "pilihan_ganda" | "benar_salah" | "isian" | "deskripsi";
 
 export type TipeSoalConfig = Partial<Record<QuestionType, number>>;
@@ -146,19 +148,57 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+/** Batas waktu default; permintaan yang menggantung lebih lama dianggap gagal. */
+const DEFAULT_TIMEOUT_MS = 20_000;
+
+/**
+ * Pengumpulan jawaban memicu koreksi AI di server, jadi butuh tenggang jauh
+ * lebih panjang (nginx sendiri memberi 300s). Membatalkan terlalu cepat justru
+ * berbahaya: submit-nya sudah jalan di server, lalu klien mencoba ulang.
+ */
+const SUBMIT_TIMEOUT_MS = 120_000;
+
+interface RequestOptions {
+  timeoutMs?: number;
+}
+
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  opts?: RequestOptions
+): Promise<T> {
   let res: Response;
+  const sentAt = Date.now();
+  // AbortController manual (bukan AbortSignal.timeout) supaya jalan di jsdom.
+  const controller = new AbortController();
+  const timeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
   try {
     res = await fetch(path, {
       ...init,
+      signal: controller.signal,
       headers: {
         ...(init?.headers ?? {}),
       },
     });
   } catch {
     // Kegagalan jaringan (offline, DNS, dsb.) — bedakan dari respons HTTP.
-    throw new ApiError("Tidak ada koneksi ke server.", 0);
+    // Timeout diperlakukan sama: status 0 = kelas yang boleh dicoba ulang.
+    throw new ApiError(
+      timedOut
+        ? "Server terlalu lama merespons."
+        : "Tidak ada koneksi ke server.",
+      0
+    );
+  } finally {
+    clearTimeout(timer);
   }
+  // Setiap respons membawa header Date — dipakai mengoreksi jam perangkat.
+  noteServerDateHeader(res.headers.get("date"), sentAt, Date.now());
   if (res.status === 204) return undefined as T;
   let body: unknown = null;
   try {
@@ -240,11 +280,15 @@ export function submitQuiz(
   quizId: string,
   answers: Record<string, unknown>
 ): Promise<SubmitResponse> {
-  return request(`/api/quiz/${quizId}/submit`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ answers }),
-  });
+  return request(
+    `/api/quiz/${quizId}/submit`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ answers }),
+    },
+    { timeoutMs: SUBMIT_TIMEOUT_MS }
+  );
 }
 
 export function loginAdmin(email: string, password: string): Promise<{ access_token: string }> {

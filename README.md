@@ -175,5 +175,7 @@ Setelah jalan, frontend mem-proxy `/api` ke backend lewat private networking (`B
 - Riwayat hasil disimpan di server (tabel `attempts`) dan dikorelasikan per perangkat lewat cookie anonim `client_id` (httpOnly, berlaku ±1 tahun). Menghapus cookie membuat riwayat lama tidak lagi muncul di perangkat itu, tetapi data di Supabase tetap ada.
 - PDF hasil **scan** (gambar) tidak terbaca — hanya PDF ber-teks dan TXT yang didukung, maksimal 2 MB.
 - Submission setelah waktu habis tetap diterima dan ditandai `expired`.
+- Pengumpulan bersifat **idempoten**: mengirim ulang paket yang sudah dikumpulkan mengembalikan hasil yang tersimpan tanpa menilai ulang ke AI, sehingga percobaan ulang saat koneksi putus tidak menimpa nilai.
+- Jawaban yang sedang dikerjakan disimpan sebagai draf di perangkat (localStorage) dan dipulihkan saat halaman dibuka ulang. Timer memakai jam server (header `Date`), jadi jam perangkat yang meleset tidak memengaruhi sisa waktu.
 - Menghapus tipe ujian atau mata pelajaran ditolak bila masih dipakai materi atau kuis; pindahkan/hapus materinya atau Reset Pool dulu.
 - Menghapus paket soal individual (Panel Admin → tab Kuis) juga menghapus riwayat attempt paket tersebut — konfirmasi ditampilkan lebih dulu untuk paket yang sudah pernah dibuka siswa.

@@ -614,6 +614,23 @@ async def submit(
         # Kirim jawaban tanpa pernah membuka kuis: mulai dan langsung kedaluwarsa
         attempt = _create_attempt(sb, quiz, client_id, expires_at=datetime.now(timezone.utc))
 
+    # Idempoten: paket yang sudah dikumpulkan mengembalikan hasil yang tersimpan,
+    # tanpa menilai ulang. Tanpa ini, percobaan ulang dari browser (koneksi putus
+    # saat respons dikirim) akan memanggil AI lagi dan menimpa nilai yang sudah ada.
+    if attempt.get("submitted_at") and attempt.get("score"):
+        score = attempt["score"]
+        return {
+            "quiz_id": quiz_id,
+            "subject": quiz["subject"],
+            "grade": quiz["grade"],
+            "exam_type": (exam_row or {}).get("name", ""),
+            "nilai": score.get("nilai", 0),
+            "poin": score.get("poin"),
+            "poin_maks": score.get("poin_maks"),
+            "per_question": score.get("per_question", []),
+            "expired": attempt.get("expired", False),
+        }
+
     now = datetime.now(timezone.utc)
     expires_at = datetime.fromisoformat(attempt["expires_at"])
     expired = expires_at < now

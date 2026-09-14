@@ -652,6 +652,43 @@ class TestSubmit:
         res = client.post("/api/quiz/quiz-123/submit", json={"answers": {"2": "x"}})
         assert res.status_code == 502
 
+    def test_submit_twice_is_idempotent(self, client, sb, monkeypatch):
+        """Percobaan ulang (respons pertama hilang di jaringan) mengembalikan
+        hasil tersimpan tanpa menilai ulang dan tanpa menimpa nilai."""
+        exam_type_fixture(sb)
+        insert_quiz(sb, "quiz-123")
+        self._open(client, "quiz-123")
+
+        calls = []
+
+        async def fake_grade(items):
+            calls.append(items)
+            return {2: {"verdict": "parsial", "skor": 0.5, "umpan_balik": "Hampir tepat"}}
+
+        monkeypatch.setattr(quiz_router, "grade_short_answers", fake_grade)
+
+        first = client.post(
+            "/api/quiz/quiz-123/submit",
+            json={"answers": {"0": 1, "1": "benar", "2": "jakarta"}},
+        )
+        assert first.status_code == 200
+        submitted_at = sb.tables["attempts"][0]["submitted_at"]
+
+        second = client.post(
+            "/api/quiz/quiz-123/submit",
+            json={"answers": {"0": 0, "1": "salah", "2": ""}},
+        )
+        assert second.status_code == 200
+        assert second.json() == first.json()
+        # AI hanya dipanggil sekali, dan jawaban/waktu asli tidak berubah
+        assert len(calls) == 1
+        assert sb.tables["attempts"][0]["submitted_at"] == submitted_at
+        assert sb.tables["attempts"][0]["answers"] == {
+            "0": 1,
+            "1": "benar",
+            "2": "jakarta",
+        }
+
 
 class TestAvailable:
     def test_aggregates_combinations(self, client, sb):

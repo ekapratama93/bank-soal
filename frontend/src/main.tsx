@@ -1,11 +1,11 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import {
-  BrowserRouter,
   Link,
   NavLink,
-  Route,
-  Routes,
+  Outlet,
+  RouterProvider,
+  createBrowserRouter,
   useLocation,
 } from "react-router-dom";
 import { GraduationCap } from "lucide-react";
@@ -66,24 +66,29 @@ function Shell() {
           isAdmin && "mx-auto max-w-4xl px-4 py-6"
         )}
       >
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/quiz/:quizId" element={<Quiz />} />
-          <Route path="/result/:quizId" element={<Result />} />
-          <Route path="/riwayat" element={<History />} />
-          <Route path="/admin" element={<Admin />} />
-        </Routes>
+        <Outlet />
       </main>
     </>
   );
 }
 
+// Data router (createBrowserRouter) dipakai supaya halaman ujian bisa menahan
+// navigasi keluar lewat useBlocker — itu tidak tersedia di <BrowserRouter>.
+const router = createBrowserRouter([
+  {
+    element: <Shell />,
+    children: [
+      { path: "/", element: <Home /> },
+      { path: "/quiz/:quizId", element: <Quiz /> },
+      { path: "/result/:quizId", element: <Result /> },
+      { path: "/riwayat", element: <History /> },
+      { path: "/admin", element: <Admin /> },
+    ],
+  },
+]);
+
 function App() {
-  return (
-    <BrowserRouter>
-      <Shell />
-    </BrowserRouter>
-  );
+  return <RouterProvider router={router} />;
 }
 
 createRoot(document.getElementById("root")!).render(

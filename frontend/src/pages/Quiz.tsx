@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useBlocker, useNavigate, useParams } from "react-router-dom";
 import {
   AlertTriangle,
   ChevronLeft,
@@ -9,18 +9,17 @@ import {
   LayoutGrid,
   Save,
 } from "lucide-react";
-import {
-  ApiError,
-  getQuiz,
-  submitQuiz,
-  type QuestionPublic,
-  type SubmitResponse,
-} from "../api/client";
+import { ApiError, getQuiz, type QuestionPublic } from "../api/client";
+import { submitWithReconcile } from "../lib/quizSubmit";
+import { serverNow } from "../lib/serverTime";
 import { markServed } from "../storage/results";
 import {
   clearQuizDraft,
   loadQuizDraft,
+  reconcileDraft,
   saveQuizDraft,
+  type QuizDraft,
+  type ReconciledDraft,
 } from "../storage/quizDraft";
 import { applySeo } from "../lib/seo";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -45,6 +44,17 @@ const NAV_LEGEND = [
   { dotClassName: "bg-warning", label: "Ditandai" },
 ];
 
+/** Jangan auto-submit dalam sekian milidetik pertama setelah kuis dimuat. */
+const MOUNT_GRACE_MS = 1500;
+/** Tunda penulisan draf selama siswa masih mengetik. */
+const DRAFT_DEBOUNCE_MS = 800;
+/** Tapi tetap simpan sesering ini walau mengetik terus. */
+const DRAFT_MAX_WAIT_MS = 5000;
+/** Percobaan kirim otomatis sebelum menyerah dan minta aksi siswa. */
+const MAX_SUBMIT_ATTEMPTS = 5;
+
+type SubmitStatus = "idle" | "submitting" | "waiting" | "done" | "gave_up";
+
 function formatTime(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
   const m = Math.floor(totalSeconds / 60);
@@ -63,7 +73,6 @@ export default function Quiz() {
   const [expiresAt, setExpiresAt] = useState<number | null>(null);
   const [remaining, setRemaining] = useState(0);
   const [answers, setAnswers] = useState<Record<string, number | string>>({});
-  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
@@ -73,41 +82,86 @@ export default function Quiz() {
   const [phase, setPhase] = useState<"exam" | "review">("exam");
   const [navOpen, setNavOpen] = useState(false);
   const [restored, setRestored] = useState(false);
+  // Draf yang tidak cocok dengan attempt server — siswa yang memutuskan.
+  const [staleDraft, setStaleDraft] = useState<ReconciledDraft | null>(null);
+  const [storageBlocked, setStorageBlocked] = useState(false);
+
+  const [submitStatus, setSubmitStatus] = useState<SubmitStatus>("idle");
+  const [retryAt, setRetryAt] = useState<number | null>(null);
 
   const answersRef = useRef(answers);
   answersRef.current = answers;
-  const submittedRef = useRef(false);
-  const expiresAtRef = useRef<number | null>(null);
-  const submitAttemptsRef = useRef(0);
-  const submitRetryAtRef = useRef(0);
+  const inFlightRef = useRef(false);
+  const settledRef = useRef(false);
+  const submitAttemptRef = useRef(0);
+  const expiredFiredRef = useRef(false);
+  const pendingDraftRef = useRef<QuizDraft | null>(null);
+  const lastSavedAtRef = useRef(0);
 
-  async function doSubmit(manual = false) {
-    if (submittedRef.current || !quizId) return;
-    submittedRef.current = true;
-    if (manual) {
-      submitAttemptsRef.current = 0;
-      submitRetryAtRef.current = 0;
-    }
-    setSubmitting(true);
+  // Selama pengumpulan berjalan, jawaban tidak boleh diubah lagi.
+  const busy = submitStatus === "submitting" || submitStatus === "done";
+
+  /** Tulis draf yang tertunda ke penyimpanan sekarang juga. */
+  const flushDraft = useCallback(() => {
+    const draft = pendingDraftRef.current;
+    if (!draft) return;
+    pendingDraftRef.current = null;
+    lastSavedAtRef.current = Date.now();
+    setStorageBlocked(saveQuizDraft(draft) !== "ok");
+  }, []);
+
+  /**
+   * Satu percobaan pengumpulan. Kegagalan direkonsiliasi dulu (lihat
+   * lib/quizSubmit.ts) supaya percobaan ulang tidak menilai ulang jawaban yang
+   * sebenarnya sudah masuk.
+   */
+  const runSubmit = useCallback(async () => {
+    if (inFlightRef.current || settledRef.current || !quizId) return;
+    inFlightRef.current = true;
+    setSubmitStatus("submitting");
     setError(null);
-    try {
-      const result: SubmitResponse = await submitQuiz(quizId, answersRef.current);
+    flushDraft();
+
+    const attempt = submitAttemptRef.current;
+    const outcome = await submitWithReconcile(quizId, answersRef.current, attempt);
+    inFlightRef.current = false;
+    if (settledRef.current) return;
+
+    if (outcome.status === "success" || outcome.status === "already-submitted") {
+      settledRef.current = true;
+      setSubmitStatus("done");
+      setRetryAt(null);
       clearQuizDraft(quizId);
-      navigate(`/result/${result.quiz_id}`, { state: { result } });
-    } catch (e) {
-      submittedRef.current = false;
-      // Backoff antar percobaan otomatis: 1s, 2s, 4s, … maks 30s.
-      submitAttemptsRef.current += 1;
-      submitRetryAtRef.current =
-        Date.now() + Math.min(30000, 1000 * 2 ** submitAttemptsRef.current);
-      setSubmitting(false);
-      setError(
-        e instanceof ApiError
-          ? e.message
-          : "Koneksi bermasalah. Jawaban tetap tersimpan — pengumpulan dicoba ulang otomatis."
-      );
+      navigate(`/result/${quizId}`, { state: { result: outcome.result } });
+      return;
     }
-  }
+
+    setError(outcome.error);
+    if (outcome.status === "retry") {
+      submitAttemptRef.current = attempt + 1;
+      if (submitAttemptRef.current < MAX_SUBMIT_ATTEMPTS) {
+        setSubmitStatus("waiting");
+        setRetryAt(Date.now() + outcome.retryInMs);
+        return;
+      }
+    }
+    setSubmitStatus("gave_up");
+    setRetryAt(null);
+  }, [quizId, navigate, flushDraft]);
+
+  /** Kumpulkan atas permintaan siswa — mulai lagi dari percobaan pertama. */
+  const submitNow = useCallback(() => {
+    submitAttemptRef.current = 0;
+    setRetryAt(null);
+    void runSubmit();
+  }, [runSubmit]);
+
+  const applyDraft = useCallback((d: ReconciledDraft) => {
+    setAnswers(d.answers);
+    setFlagged(d.flagged);
+    setCurrent(d.current);
+    setPhase(d.phase);
+  }, []);
 
   useEffect(() => {
     applySeo({ title: "Latihan Soal", noindex: true });
@@ -141,32 +195,21 @@ export default function Quiz() {
           markServed(quiz.quiz_id);
           const expiry = new Date(quiz.expires_at).getTime();
           setExpiresAt(expiry);
-          expiresAtRef.current = expiry;
           // Pulihkan draf jawaban sebelumnya (mis. halaman sempat di-reload).
-          // Cocokkan expires_at supaya draf lama dari attempt lain dibuang.
-          const draft = loadQuizDraft(quizId);
-          if (draft && draft.expiresAt === expiry) {
-            const total = quiz.questions.length;
-            const saved: Record<string, number | string> = {};
-            for (const [k, v] of Object.entries(draft.answers ?? {})) {
-              const idx = Number(k);
-              if (
-                Number.isInteger(idx) &&
-                idx >= 0 &&
-                idx < total &&
-                v !== "" &&
-                v !== undefined &&
-                v !== null
-              ) {
-                saved[k] = v;
-              }
-            }
-            setAnswers(saved);
-            setFlagged(draft.flagged ?? {});
-            setCurrent(Math.max(0, Math.min(draft.current, total - 1)));
-            setPhase(draft.phase === "review" ? "review" : "exam");
-            if (Object.keys(saved).length > 0) setRestored(true);
+          const draft = reconcileDraft(
+            loadQuizDraft(quizId),
+            expiry,
+            quiz.questions.length
+          );
+          if (!draft) return;
+          const hasAnswers = Object.keys(draft.answers).length > 0;
+          if (draft.match === "stale") {
+            // Draf dari attempt lain: tawarkan, jangan buang diam-diam.
+            if (hasAnswers) setStaleDraft(draft);
+            return;
           }
+          applyDraft(draft);
+          if (hasAnswers) setRestored(true);
         })
         .catch((e) => {
           if (cancelled) return;
@@ -193,27 +236,64 @@ export default function Quiz() {
       cancelled = true;
       if (retryTimer) window.clearTimeout(retryTimer);
     };
-  }, [quizId, reloadKey]);
+  }, [quizId, reloadKey, applyDraft]);
 
+  // Hitung mundur memakai jam server (lihat lib/serverTime.ts) supaya jam
+  // perangkat yang meleset tidak membuat ujian berakhir terlalu cepat/lambat.
   useEffect(() => {
     if (expiresAt === null) return;
+    const graceUntil = Date.now() + MOUNT_GRACE_MS;
     const tick = () => {
-      const left = Math.max(0, expiresAt - Date.now());
-      setRemaining(left);
-      if (left <= 0 && Date.now() >= submitRetryAtRef.current) {
-        void doSubmit();
-      }
+      setRemaining(Math.max(0, expiresAt - serverNow()));
+      if (expiresAt - serverNow() > 0) return;
+      if (expiredFiredRef.current || settledRef.current) return;
+      // Beri jeda sesaat setelah halaman dibuka: kalau kuis memang sudah lewat
+      // waktunya, siswa sempat melihat pesannya sebelum jawaban dikirim.
+      if (Date.now() < graceUntil) return;
+      expiredFiredRef.current = true;
+      void runSubmit();
     };
     tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expiresAt]);
+    const id = window.setInterval(tick, 1000);
+    // setInterval dibekukan saat tab tersembunyi / layar terkunci; hitung ulang
+    // begitu halaman aktif lagi supaya auto-submit tidak tertinggal jauh.
+    window.addEventListener("focus", tick);
+    window.addEventListener("online", tick);
+    document.addEventListener("visibilitychange", tick);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener("focus", tick);
+      window.removeEventListener("online", tick);
+      document.removeEventListener("visibilitychange", tick);
+    };
+  }, [expiresAt, runSubmit]);
 
-  // Simpan draf jawaban tiap perubahan — aman terhadap reload/back.
+  // Percobaan ulang terjadwal setelah pengumpulan gagal.
   useEffect(() => {
-    if (!quizId || expiresAt === null || submitting) return;
-    saveQuizDraft({
+    if (submitStatus !== "waiting" || retryAt === null) return;
+    const id = window.setTimeout(
+      () => void runSubmit(),
+      Math.max(0, retryAt - Date.now())
+    );
+    return () => window.clearTimeout(id);
+  }, [submitStatus, retryAt, runSubmit]);
+
+  // Koneksi kembali / tab dibuka lagi: jangan tunggu sisa backoff.
+  useEffect(() => {
+    if (submitStatus !== "waiting") return;
+    const now = () => setRetryAt(Date.now());
+    window.addEventListener("online", now);
+    window.addEventListener("focus", now);
+    return () => {
+      window.removeEventListener("online", now);
+      window.removeEventListener("focus", now);
+    };
+  }, [submitStatus]);
+
+  // Simpan draf jawaban, ditunda selagi siswa mengetik.
+  useEffect(() => {
+    if (!quizId || expiresAt === null || settledRef.current || busy) return;
+    pendingDraftRef.current = {
       quizId,
       subject,
       answers,
@@ -222,8 +302,37 @@ export default function Quiz() {
       phase,
       expiresAt,
       savedAt: Date.now(),
-    });
-  }, [quizId, expiresAt, submitting, subject, answers, flagged, current, phase]);
+    };
+    // Mengetik terus-menerus tidak boleh menunda simpan tanpa batas.
+    if (Date.now() - lastSavedAtRef.current >= DRAFT_MAX_WAIT_MS) {
+      flushDraft();
+      return;
+    }
+    const id = window.setTimeout(flushDraft, DRAFT_DEBOUNCE_MS);
+    return () => window.clearTimeout(id);
+  }, [
+    quizId,
+    expiresAt,
+    busy,
+    subject,
+    answers,
+    flagged,
+    current,
+    phase,
+    flushDraft,
+  ]);
+
+  // Tulis draf sebelum halaman ditutup/disembunyikan (penting di iOS).
+  useEffect(() => {
+    const onHide = () => flushDraft();
+    window.addEventListener("pagehide", onHide);
+    document.addEventListener("visibilitychange", onHide);
+    return () => {
+      window.removeEventListener("pagehide", onHide);
+      document.removeEventListener("visibilitychange", onHide);
+      flushDraft();
+    };
+  }, [flushDraft]);
 
   // Konfirmasi sebelum menutup/meninggalkan tab saat ujian masih berjalan.
   useEffect(() => {
@@ -232,13 +341,28 @@ export default function Quiz() {
       const hasProgress = Object.values(answersRef.current).some(
         (v) => v !== undefined && v !== null && v !== ""
       );
-      if (!hasProgress) return;
+      if (!hasProgress || settledRef.current) return;
       e.preventDefault();
       e.returnValue = "";
     };
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
   }, [expiresAt]);
+
+  const hasProgress = Object.values(answers).some(
+    (v) => v !== undefined && v !== null && v !== ""
+  );
+  // Pindah halaman di dalam aplikasi meng-unmount halaman ini — timer dan
+  // auto-submit ikut mati — jadi tahan dulu dan minta konfirmasi.
+  const blocker = useBlocker(
+    ({ currentLocation, nextLocation }) =>
+      questions !== null &&
+      !settledRef.current &&
+      submitStatus !== "done" &&
+      remaining > 0 &&
+      hasProgress &&
+      currentLocation.pathname !== nextLocation.pathname
+  );
 
   function isAnswered(idx: number): boolean {
     const v = answers[String(idx)];
@@ -354,9 +478,92 @@ export default function Quiz() {
         </CardContent>
       </Card>
 
-      {error && (
+      {blocker.state === "blocked" && (
+        <Card className="border-warning">
+          <CardContent className="flex flex-col gap-3">
+            <div className="flex items-center gap-2 font-extrabold">
+              <AlertTriangle className="text-warning" />
+              Ujian masih berjalan
+            </div>
+            <p className="text-muted-foreground text-sm">
+              Waktu terus berjalan dan jawabanmu belum dikumpulkan. Kalau keluar
+              sekarang, jawaban tetap tersimpan di perangkat ini tetapi timer
+              tidak berhenti.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={() => blocker.reset?.()}>Lanjutkan Ujian</Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  flushDraft();
+                  blocker.proceed?.();
+                }}
+              >
+                Keluar
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {storageBlocked && (
         <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
+          <AlertTriangle />
+          <AlertDescription>
+            Jawaban tidak bisa disimpan di perangkat ini. Jangan tutup halaman
+            sampai ujian selesai dikumpulkan.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {staleDraft && (
+        <Alert variant="warning">
+          <Save />
+          <AlertDescription className="flex flex-col items-start gap-2">
+            <span>
+              Ada draf jawaban dari sesi sebelumnya (
+              {Object.keys(staleDraft.answers).length} soal terjawab). Pulihkan?
+            </span>
+            <span className="flex gap-2">
+              <Button
+                size="sm"
+                onClick={() => {
+                  applyDraft(staleDraft);
+                  setStaleDraft(null);
+                  setRestored(true);
+                }}
+              >
+                Pulihkan
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setStaleDraft(null)}
+              >
+                Abaikan
+              </Button>
+            </span>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {error && (
+        <Alert variant={submitStatus === "waiting" ? "warning" : "destructive"}>
+          {submitStatus === "waiting" && <AlertTriangle />}
+          <AlertDescription className="flex flex-col items-start gap-2">
+            <span>{error}</span>
+            {submitStatus === "waiting" && (
+              <Button size="sm" variant="outline" onClick={submitNow}>
+                Coba Sekarang
+              </Button>
+            )}
+            {submitStatus === "gave_up" && (
+              <span className="text-xs">
+                Jawabanmu masih tersimpan di perangkat ini — coba kumpulkan lagi
+                setelah koneksi membaik.
+              </span>
+            )}
+          </AlertDescription>
         </Alert>
       )}
 
@@ -415,7 +622,7 @@ export default function Quiz() {
                         : ""
                     }
                     onValueChange={(v) =>
-                      setAnswers({ ...answers, [String(current)]: Number(v) })
+                      setAnswers((prev) => ({ ...prev, [String(current)]: Number(v) }))
                     }
                     className="grid grid-cols-1 gap-3 sm:grid-cols-2"
                   >
@@ -435,7 +642,7 @@ export default function Quiz() {
                           <RadioGroupItem
                             value={String(oi)}
                             id={`q-${current}-${oi}`}
-                            disabled={submitting}
+                            disabled={busy}
                           />
                           <MathText text={opt} />
                         </Label>
@@ -451,7 +658,7 @@ export default function Quiz() {
                         : ""
                     }
                     onValueChange={(v) =>
-                      setAnswers({ ...answers, [String(current)]: v })
+                      setAnswers((prev) => ({ ...prev, [String(current)]: v }))
                     }
                     className="grid grid-cols-1 gap-3 sm:grid-cols-2"
                   >
@@ -471,7 +678,7 @@ export default function Quiz() {
                           <RadioGroupItem
                             value={v}
                             id={`q-${current}-${v}`}
-                            disabled={submitting}
+                            disabled={busy}
                           />
                           {v === "benar" ? "Benar" : "Salah"}
                         </Label>
@@ -488,9 +695,9 @@ export default function Quiz() {
                         : ""
                     }
                     onChange={(e) =>
-                      setAnswers({ ...answers, [String(current)]: e.target.value })
+                      setAnswers((prev) => ({ ...prev, [String(current)]: e.target.value }))
                     }
-                    disabled={submitting}
+                    disabled={busy}
                   />
                 )}
                 {q.tipe === "deskripsi" && (
@@ -503,9 +710,9 @@ export default function Quiz() {
                         : ""
                     }
                     onChange={(e) =>
-                      setAnswers({ ...answers, [String(current)]: e.target.value })
+                      setAnswers((prev) => ({ ...prev, [String(current)]: e.target.value }))
                     }
-                    disabled={submitting}
+                    disabled={busy}
                   />
                 )}
               </CardContent>
@@ -607,8 +814,12 @@ export default function Quiz() {
             <Button variant="outline" onClick={() => setPhase("exam")}>
               Kembali ke Soal
             </Button>
-            <Button onClick={() => void doSubmit(true)} disabled={submitting}>
-              {submitting ? "Mengumpulkan…" : "Konfirmasi & Kumpulkan"}
+            <Button onClick={submitNow} disabled={busy}>
+              {submitStatus === "submitting"
+                ? "Mengumpulkan…"
+                : submitStatus === "gave_up"
+                  ? "Coba Kumpulkan Lagi"
+                  : "Konfirmasi & Kumpulkan"}
             </Button>
           </div>
         </div>
