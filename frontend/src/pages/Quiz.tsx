@@ -7,6 +7,7 @@ import {
   Clock,
   Flag,
   LayoutGrid,
+  Save,
 } from "lucide-react";
 import {
   ApiError,
@@ -16,6 +17,12 @@ import {
   type SubmitResponse,
 } from "../api/client";
 import { markServed } from "../storage/results";
+import {
+  clearQuizDraft,
+  loadQuizDraft,
+  saveQuizDraft,
+} from "../storage/quizDraft";
+import { applySeo } from "../lib/seo";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -63,6 +70,7 @@ export default function Quiz() {
   const [flagged, setFlagged] = useState<Record<string, boolean>>({});
   const [phase, setPhase] = useState<"exam" | "review">("exam");
   const [navOpen, setNavOpen] = useState(false);
+  const [restored, setRestored] = useState(false);
 
   const answersRef = useRef(answers);
   answersRef.current = answers;
@@ -76,6 +84,7 @@ export default function Quiz() {
     setError(null);
     try {
       const result: SubmitResponse = await submitQuiz(quizId, answersRef.current);
+      clearQuizDraft(quizId);
       navigate(`/result/${result.quiz_id}`, { state: { result } });
     } catch (e) {
       submittedRef.current = false;
@@ -89,6 +98,19 @@ export default function Quiz() {
   }
 
   useEffect(() => {
+    applySeo({ title: "Latihan Soal", noindex: true });
+  }, []);
+
+  // Judul spesifik setelah paket dimuat (halaman tidak diindeks; ini untuk UX)
+  useEffect(() => {
+    if (!subject) return;
+    applySeo({
+      title: `Latihan Soal ${subject} Kelas ${grade}${examType ? ` — ${examType}` : ""}`,
+      noindex: true,
+    });
+  }, [subject, grade, examType]);
+
+  useEffect(() => {
     if (!quizId) return;
     getQuiz(quizId)
       .then((quiz) => {
@@ -100,6 +122,31 @@ export default function Quiz() {
         const expiry = new Date(quiz.expires_at).getTime();
         setExpiresAt(expiry);
         expiresAtRef.current = expiry;
+        // Pulihkan draf jawaban sebelumnya (mis. halaman sempat di-reload).
+        // Cocokkan expires_at supaya draf lama dari attempt lain dibuang.
+        const draft = loadQuizDraft(quizId);
+        if (draft && draft.expiresAt === expiry) {
+          const total = quiz.questions.length;
+          const saved: Record<string, number | string> = {};
+          for (const [k, v] of Object.entries(draft.answers ?? {})) {
+            const idx = Number(k);
+            if (
+              Number.isInteger(idx) &&
+              idx >= 0 &&
+              idx < total &&
+              v !== "" &&
+              v !== undefined &&
+              v !== null
+            ) {
+              saved[k] = v;
+            }
+          }
+          setAnswers(saved);
+          setFlagged(draft.flagged ?? {});
+          setCurrent(Math.max(0, Math.min(draft.current, total - 1)));
+          setPhase(draft.phase === "review" ? "review" : "exam");
+          if (Object.keys(saved).length > 0) setRestored(true);
+        }
       })
       .catch(() =>
         setError("Kuis tidak ditemukan atau sudah tidak berlaku. Kembali ke Beranda.")
@@ -119,6 +166,36 @@ export default function Quiz() {
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expiresAt]);
+
+  // Simpan draf jawaban tiap perubahan — aman terhadap reload/back.
+  useEffect(() => {
+    if (!quizId || expiresAt === null || submitting) return;
+    saveQuizDraft({
+      quizId,
+      subject,
+      answers,
+      flagged,
+      current,
+      phase,
+      expiresAt,
+      savedAt: Date.now(),
+    });
+  }, [quizId, expiresAt, submitting, subject, answers, flagged, current, phase]);
+
+  // Konfirmasi sebelum menutup/meninggalkan tab saat ujian masih berjalan.
+  useEffect(() => {
+    if (expiresAt === null) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      const hasProgress = Object.values(answersRef.current).some(
+        (v) => v !== undefined && v !== null && v !== ""
+      );
+      if (!hasProgress) return;
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
   }, [expiresAt]);
 
   function isAnswered(idx: number): boolean {
@@ -220,6 +297,16 @@ export default function Quiz() {
       {error && (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      {restored && phase === "exam" && (
+        <Alert variant="success">
+          <Save />
+          <AlertDescription>
+            Jawaban sebelumnya berhasil dipulihkan — kamu bisa lanjut dari
+            terakhir kali mengerjakan.
+          </AlertDescription>
         </Alert>
       )}
 

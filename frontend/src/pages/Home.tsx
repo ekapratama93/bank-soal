@@ -20,7 +20,9 @@ import {
   type Subject,
 } from "../api/client";
 import { getServedIds } from "../storage/results";
+import { getActiveDraft, type QuizDraft } from "../storage/quizDraft";
 import { GRADES } from "../subjects";
+import { applySeo } from "../lib/seo";
 import {
   Card,
   CardContent,
@@ -94,6 +96,19 @@ export default function Home() {
   const [examTypeId, setExamTypeId] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Draf ujian yang belum dikumpulkan (jawaban tersimpan di perangkat)
+  const [resume, setResume] = useState<QuizDraft | null>(null);
+
+  useEffect(() => {
+    applySeo({
+      title: "Bank Soal — Latihan Soal Online Kelas 1–12 dengan Nilai Otomatis",
+      path: "/",
+    });
+  }, []);
+
+  useEffect(() => {
+    setResume(getActiveDraft());
+  }, []);
 
   useEffect(() => {
     getSubjects()
@@ -365,6 +380,35 @@ export default function Home() {
           </h2>
         </div>
 
+        {resume && (
+          <Card className="border-primary/40 mx-auto mt-8 max-w-2xl">
+            <CardContent className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-extrabold">
+                  Ada ujian yang belum dikumpulkan
+                </div>
+                <p className="text-muted-foreground text-sm">
+                  {resume.subject} ·{" "}
+                  {
+                    Object.values(resume.answers).filter(
+                      (v) => v !== "" && v !== undefined && v !== null
+                    ).length
+                  }{" "}
+                  soal terjawab · sisa waktu ±
+                  {Math.max(
+                    0,
+                    Math.ceil((resume.expiresAt - Date.now()) / 60000)
+                  )}{" "}
+                  menit. Jawabanmu tersimpan di perangkat ini.
+                </p>
+              </div>
+              <Button asChild>
+                <Link to={`/quiz/${resume.quizId}`}>Lanjutkan Ujian</Link>
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
         <Card className="mx-auto mt-8 max-w-2xl">
           <CardHeader>
             <div className="flex items-center gap-2 text-primary">
@@ -472,7 +516,7 @@ export default function Home() {
       </section>
 
       {/* Footer */}
-      <section className="border-border/60 border-t px-6 py-14 text-center">
+      <footer className="border-border/60 border-t px-6 py-14 text-center">
         <p className="text-base">Guru atau admin sekolah?</p>
         <p className="text-muted-foreground mt-1.5 text-sm">
           Kelola mata pelajaran, tipe ujian, dan materi di Panel Admin.
@@ -483,7 +527,7 @@ export default function Home() {
         <p className="text-muted-foreground mt-9 text-xs">
           Bank Soal &mdash; Latihan soal sekolah dengan bantuan AI
         </p>
-      </section>
+      </footer>
     </div>
   );
 }
