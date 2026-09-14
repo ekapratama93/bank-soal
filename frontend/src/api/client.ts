@@ -137,15 +137,28 @@ export interface QuizPackageFilters {
   exam_type_id?: string;
 }
 
-export class ApiError extends Error {}
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
-    ...init,
-    headers: {
-      ...(init?.headers ?? {}),
-    },
-  });
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      ...init,
+      headers: {
+        ...(init?.headers ?? {}),
+      },
+    });
+  } catch {
+    // Kegagalan jaringan (offline, DNS, dsb.) — bedakan dari respons HTTP.
+    throw new ApiError("Tidak ada koneksi ke server.", 0);
+  }
   if (res.status === 204) return undefined as T;
   let body: unknown = null;
   try {
@@ -158,7 +171,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       body && typeof body === "object" && "detail" in body
         ? String((body as { detail: unknown }).detail)
         : "Terjadi kesalahan. Coba lagi nanti.";
-    throw new ApiError(detail);
+    throw new ApiError(detail, res.status);
   }
   return body as T;
 }

@@ -65,6 +65,8 @@ export default function Quiz() {
   const [answers, setAnswers] = useState<Record<string, number | string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [offline, setOffline] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   const [current, setCurrent] = useState(0);
   const [flagged, setFlagged] = useState<Record<string, boolean>>({});
@@ -76,10 +78,16 @@ export default function Quiz() {
   answersRef.current = answers;
   const submittedRef = useRef(false);
   const expiresAtRef = useRef<number | null>(null);
+  const submitAttemptsRef = useRef(0);
+  const submitRetryAtRef = useRef(0);
 
-  async function doSubmit() {
+  async function doSubmit(manual = false) {
     if (submittedRef.current || !quizId) return;
     submittedRef.current = true;
+    if (manual) {
+      submitAttemptsRef.current = 0;
+      submitRetryAtRef.current = 0;
+    }
     setSubmitting(true);
     setError(null);
     try {
@@ -88,11 +96,15 @@ export default function Quiz() {
       navigate(`/result/${result.quiz_id}`, { state: { result } });
     } catch (e) {
       submittedRef.current = false;
+      // Backoff antar percobaan otomatis: 1s, 2s, 4s, … maks 30s.
+      submitAttemptsRef.current += 1;
+      submitRetryAtRef.current =
+        Date.now() + Math.min(30000, 1000 * 2 ** submitAttemptsRef.current);
       setSubmitting(false);
       setError(
         e instanceof ApiError
           ? e.message
-          : "Gagal mengumpulkan jawaban. Coba klik Kumpulkan lagi."
+          : "Koneksi bermasalah. Jawaban tetap tersimpan — pengumpulan dicoba ulang otomatis."
       );
     }
   }
@@ -112,53 +124,83 @@ export default function Quiz() {
 
   useEffect(() => {
     if (!quizId) return;
-    getQuiz(quizId)
-      .then((quiz) => {
-        setQuestions(quiz.questions);
-        setSubject(quiz.subject);
-        setGrade(quiz.grade);
-        setExamType(quiz.exam_type);
-        markServed(quiz.quiz_id);
-        const expiry = new Date(quiz.expires_at).getTime();
-        setExpiresAt(expiry);
-        expiresAtRef.current = expiry;
-        // Pulihkan draf jawaban sebelumnya (mis. halaman sempat di-reload).
-        // Cocokkan expires_at supaya draf lama dari attempt lain dibuang.
-        const draft = loadQuizDraft(quizId);
-        if (draft && draft.expiresAt === expiry) {
-          const total = quiz.questions.length;
-          const saved: Record<string, number | string> = {};
-          for (const [k, v] of Object.entries(draft.answers ?? {})) {
-            const idx = Number(k);
-            if (
-              Number.isInteger(idx) &&
-              idx >= 0 &&
-              idx < total &&
-              v !== "" &&
-              v !== undefined &&
-              v !== null
-            ) {
-              saved[k] = v;
+    let cancelled = false;
+    let retryTimer: number | undefined;
+    let attempts = 0;
+
+    const load = () => {
+      getQuiz(quizId)
+        .then((quiz) => {
+          if (cancelled) return;
+          setOffline(false);
+          setError(null);
+          setQuestions(quiz.questions);
+          setSubject(quiz.subject);
+          setGrade(quiz.grade);
+          setExamType(quiz.exam_type);
+          markServed(quiz.quiz_id);
+          const expiry = new Date(quiz.expires_at).getTime();
+          setExpiresAt(expiry);
+          expiresAtRef.current = expiry;
+          // Pulihkan draf jawaban sebelumnya (mis. halaman sempat di-reload).
+          // Cocokkan expires_at supaya draf lama dari attempt lain dibuang.
+          const draft = loadQuizDraft(quizId);
+          if (draft && draft.expiresAt === expiry) {
+            const total = quiz.questions.length;
+            const saved: Record<string, number | string> = {};
+            for (const [k, v] of Object.entries(draft.answers ?? {})) {
+              const idx = Number(k);
+              if (
+                Number.isInteger(idx) &&
+                idx >= 0 &&
+                idx < total &&
+                v !== "" &&
+                v !== undefined &&
+                v !== null
+              ) {
+                saved[k] = v;
+              }
             }
+            setAnswers(saved);
+            setFlagged(draft.flagged ?? {});
+            setCurrent(Math.max(0, Math.min(draft.current, total - 1)));
+            setPhase(draft.phase === "review" ? "review" : "exam");
+            if (Object.keys(saved).length > 0) setRestored(true);
           }
-          setAnswers(saved);
-          setFlagged(draft.flagged ?? {});
-          setCurrent(Math.max(0, Math.min(draft.current, total - 1)));
-          setPhase(draft.phase === "review" ? "review" : "exam");
-          if (Object.keys(saved).length > 0) setRestored(true);
-        }
-      })
-      .catch(() =>
-        setError("Kuis tidak ditemukan atau sudah tidak berlaku. Kembali ke Beranda.")
-      );
-  }, [quizId]);
+        })
+        .catch((e) => {
+          if (cancelled) return;
+          // Kegagalan jaringan (status 0) atau server (5xx) bisa pulih —
+          // coba ulang otomatis. 4xx berarti kuis memang tidak berlaku.
+          if (e instanceof ApiError && e.status !== 0 && e.status < 500) {
+            setOffline(false);
+            setError(
+              e.message ||
+                "Kuis tidak ditemukan atau sudah tidak berlaku. Kembali ke Beranda."
+            );
+            return;
+          }
+          setOffline(true);
+          attempts += 1;
+          retryTimer = window.setTimeout(
+            load,
+            Math.min(15000, 1000 * 2 ** attempts)
+          );
+        });
+    };
+    load();
+    return () => {
+      cancelled = true;
+      if (retryTimer) window.clearTimeout(retryTimer);
+    };
+  }, [quizId, reloadKey]);
 
   useEffect(() => {
     if (expiresAt === null) return;
     const tick = () => {
       const left = Math.max(0, expiresAt - Date.now());
       setRemaining(left);
-      if (left <= 0) {
+      if (left <= 0 && Date.now() >= submitRetryAtRef.current) {
         void doSubmit();
       }
     };
@@ -232,7 +274,25 @@ export default function Quiz() {
   if (!questions) {
     return (
       <Card>
-        <CardContent className="text-muted-foreground">Memuat soal…</CardContent>
+        <CardContent className="flex flex-col gap-3">
+          <p className="text-muted-foreground">Memuat soal…</p>
+          {offline && (
+            <Alert variant="warning">
+              <AlertTriangle />
+              <AlertDescription>
+                Koneksi bermasalah — menyambungkan ulang otomatis. Jawaban yang
+                sudah tersimpan tetap aman di perangkat ini.
+              </AlertDescription>
+            </Alert>
+          )}
+          <Button
+            variant="outline"
+            className="w-fit"
+            onClick={() => setReloadKey((k) => k + 1)}
+          >
+            Coba Lagi
+          </Button>
+        </CardContent>
       </Card>
     );
   }
@@ -547,7 +607,7 @@ export default function Quiz() {
             <Button variant="outline" onClick={() => setPhase("exam")}>
               Kembali ke Soal
             </Button>
-            <Button onClick={() => void doSubmit()} disabled={submitting}>
+            <Button onClick={() => void doSubmit(true)} disabled={submitting}>
               {submitting ? "Mengumpulkan…" : "Konfirmasi & Kumpulkan"}
             </Button>
           </div>
