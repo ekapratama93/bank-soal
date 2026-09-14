@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from ..db_errors import is_fk_violation
 from ..supabase_client import get_supabase
 from .materials import require_admin
 
@@ -144,5 +145,15 @@ def delete_exam_type(exam_type_id: str, admin: dict = Depends(require_admin)):
             status_code=409,
             detail="Tipe ujian masih dipakai kuis. Reset pool dulu sebelum menghapus.",
         )
-    sb.table("exam_types").delete().eq("id", exam_type_id).execute()
+    try:
+        sb.table("exam_types").delete().eq("id", exam_type_id).execute()
+    except Exception as e:
+        # Sesuatu terpakai di celah antara pengecekan di atas dan delete ini —
+        # DB menolak lewat foreign key, bukan 500 mentah.
+        if not is_fk_violation(e):
+            raise
+        raise HTTPException(
+            status_code=409,
+            detail="Tipe ujian masih dipakai materi atau kuis. Coba lagi.",
+        )
     return None

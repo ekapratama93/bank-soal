@@ -192,6 +192,35 @@ class TestExamTypes:
         res = client.delete("/api/exam-types/tidak-ada", headers=admin_headers)
         assert res.status_code == 404
 
+    def test_delete_race_fk_violation_becomes_409(
+        self, client, admin_auth, admin_headers, monkeypatch
+    ):
+        """Sesuatu mulai memakai exam_type di celah antara pengecekan dan
+        delete (mis. materi baru disisipkan tepat setelah pre-check lolos).
+        DB menolak lewat foreign key — harus jadi 409 yang ramah, bukan 500."""
+        from postgrest.exceptions import APIError
+
+        from conftest import Query
+
+        sb = admin_auth
+        sb.tables["exam_types"] = [
+            {"id": "et-1", "name": "Lama", "jumlah_soal": None, "durasi_menit": None}
+        ]
+
+        real_execute = Query.execute
+
+        def flaky_execute(self):
+            if self.table == "exam_types" and self.op == "delete":
+                raise APIError({"code": "23503", "message": "foreign key violation"})
+            return real_execute(self)
+
+        monkeypatch.setattr(Query, "execute", flaky_execute)
+
+        res = client.delete("/api/exam-types/et-1", headers=admin_headers)
+        assert res.status_code == 409
+        # Baris tidak boleh hilang — delete-nya sungguhan gagal di DB.
+        assert sb.tables["exam_types"]
+
     def test_requires_admin(self, client, sb):
         res = client.get("/api/exam-types")  # publik
         assert res.status_code == 200

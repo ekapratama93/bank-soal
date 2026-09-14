@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from collections import Counter
@@ -16,6 +17,12 @@ QTYPE_LABELS = {
 }
 
 VALID_TYPES = {"pilihan_ganda", "benar_salah", "isian", "deskripsi"}
+
+# Status yang layak dicoba ulang (gangguan sesaat) — bukan mis. 400/401 yang
+# tak akan berhasil walau diulang.
+_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+_CHAT_ATTEMPTS = 2
+_CHAT_RETRY_DELAY_SECONDS = 1.0
 
 
 class LLMError(Exception):
@@ -155,6 +162,9 @@ def _validate_questions(data: dict, counts: dict[str, int]) -> list[dict]:
 
 
 async def _chat(messages: list[dict]) -> str:
+    """Panggil OpenRouter. Percobaan ulang (retry) hanya untuk gangguan
+    sesaat — koneksi terputus/timeout, atau status 429/5xx — bukan untuk
+    galat yang pasti akan gagal lagi (mis. API key salah)."""
     if not settings.openrouter_api_key:
         raise LLMError("OPENROUTER_API_KEY belum diatur di server")
     headers = {
@@ -168,10 +178,32 @@ async def _chat(messages: list[dict]) -> str:
         "response_format": {"type": "json_object"},
     }
     async with httpx.AsyncClient(timeout=180) as client:
-        resp = await client.post(settings.openrouter_url, headers=headers, json=payload)
-        if resp.status_code != 200:
+        for attempt in range(_CHAT_ATTEMPTS):
+            is_last = attempt == _CHAT_ATTEMPTS - 1
+            try:
+                resp = await client.post(
+                    settings.openrouter_url, headers=headers, json=payload
+                )
+            except httpx.RequestError as e:
+                logger.warning(
+                    "Koneksi ke OpenRouter gagal (percobaan %d): %s", attempt + 1, e
+                )
+                if is_last:
+                    raise LLMError(
+                        "Gagal terhubung ke layanan AI. Coba lagi nanti."
+                    ) from e
+                await asyncio.sleep(_CHAT_RETRY_DELAY_SECONDS)
+                continue
+
+            if resp.status_code == 200:
+                break
+
             logger.error("OpenRouter error %s: %s", resp.status_code, resp.text[:500])
+            if resp.status_code in _RETRYABLE_STATUS and not is_last:
+                await asyncio.sleep(_CHAT_RETRY_DELAY_SECONDS)
+                continue
             raise LLMError("Gagal menghubungi layanan AI. Coba lagi nanti.")
+
         try:
             content = resp.json()["choices"][0]["message"]["content"]
         except (KeyError, IndexError, ValueError) as e:

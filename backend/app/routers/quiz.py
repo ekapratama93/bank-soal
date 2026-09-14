@@ -4,8 +4,9 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+from ..db_errors import is_unique_violation
 from ..grade_config import get_config
 from ..image_gen import ImageGenError, generate_image
 from ..image_search import search_stock_image
@@ -62,8 +63,31 @@ class QuizRequest(BaseModel):
     served_ids: list[str] = Field(default_factory=list, max_length=100)
 
 
+# Batas wajar untuk jawaban dari endpoint anonim ini — jumlah soal maksimum
+# sebuah tipe ujian sendiri dibatasi 50 (lihat exam_types.py), dan nilai isian
+# ikut masuk mentah ke prompt koreksi AI (llm.py grade_short_answers), jadi
+# payload tak berbatas bisa membengkakkan biaya/waktu panggilan AI.
+MAX_ANSWER_KEYS = 100
+MAX_ANSWER_VALUE_LENGTH = 5000
+
+
 class SubmitRequest(BaseModel):
     answers: dict[str, object]
+
+    @field_validator("answers")
+    @classmethod
+    def _bound_answers(cls, v: dict[str, object]) -> dict[str, object]:
+        if len(v) > MAX_ANSWER_KEYS:
+            raise ValueError(f"Jumlah jawaban melebihi batas ({MAX_ANSWER_KEYS}).")
+        for value in v.values():
+            if value is None:
+                continue
+            if isinstance(value, str):
+                if len(value) > MAX_ANSWER_VALUE_LENGTH:
+                    raise ValueError("Salah satu jawaban terlalu panjang.")
+            elif not isinstance(value, (int, float, bool)):
+                raise ValueError("Tipe jawaban tidak valid.")
+        return v
 
 
 class PoolResetRequest(BaseModel):
@@ -148,19 +172,31 @@ def _create_attempt(sb, quiz: dict, client_id: str, expires_at: datetime | None 
     if not quiz.get("started"):
         sb.table("quizzes").update({"started": True}).eq("id", quiz["id"]).execute()
         quiz["started"] = True
-    res = (
-        sb.table("attempts")
-        .insert(
-            {
-                "quiz_id": quiz["id"],
-                "client_id": client_id,
-                "expires_at": expires_at.isoformat(),
-                "expired": False,
-            }
+    try:
+        res = (
+            sb.table("attempts")
+            .insert(
+                {
+                    "quiz_id": quiz["id"],
+                    "client_id": client_id,
+                    "expires_at": expires_at.isoformat(),
+                    "expired": False,
+                }
+            )
+            .execute()
         )
-        .execute()
-    )
-    return res.data[0]
+        return res.data[0]
+    except Exception as e:
+        # Dua request nyaris bersamaan (double-click, dua tab, retry klien)
+        # bisa lolos _get_attempt() yang sama-sama tidak menemukan baris, lalu
+        # berlomba insert — idx_attempts_quiz_client di DB menolak yang kalah.
+        # Alih-alih 500 mentah, ambil baris milik pemenangnya.
+        if not is_unique_violation(e):
+            raise
+        winner = _get_attempt(sb, quiz["id"], client_id)
+        if winner is None:
+            raise
+        return winner
 
 
 def _get_or_create_attempt(sb, quiz: dict, client_id: str) -> dict:
@@ -557,12 +593,15 @@ def admin_update_quiz(
 
 @router.delete("/admin/quizzes/{quiz_id}", status_code=204)
 def admin_delete_quiz(quiz_id: str, admin: dict = Depends(require_admin)):
-    """Admin: hapus satu paket soal. Riwayat pengerjaan paket ini ikut terhapus."""
+    """Admin: hapus satu paket soal. Riwayat pengerjaan paket ini ikut terhapus
+    lewat "on delete cascade" attempts.quiz_id di schema.sql — hanya satu
+    panggilan delete di sini, jadi tidak ada jendela di mana quiz sudah
+    terhapus tapi attempts-nya tertinggal (atau sebaliknya) akibat panggilan
+    kedua yang gagal."""
     sb = get_supabase()
     res = sb.table("quizzes").select("id").eq("id", quiz_id).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="Paket soal tidak ditemukan")
-    sb.table("attempts").delete().eq("quiz_id", quiz_id).execute()
     sb.table("quizzes").delete().eq("id", quiz_id).execute()
     return None
 

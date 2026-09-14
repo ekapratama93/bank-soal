@@ -1,10 +1,13 @@
 import json
 
+import httpx
 import pytest
 
+from app.config import settings
 from app.llm import (
     LLMError,
     _build_prompt,
+    _chat,
     _validate_questions,
     generate_quiz,
     grade_short_answers,
@@ -305,3 +308,96 @@ class TestGradeShortAnswers:
 
         monkeypatch.setattr("app.llm._chat", fail_chat)
         assert await grade_short_answers([]) == {}
+
+class TestChat:
+    """_chat() sendiri — percobaan ulang untuk gangguan sesaat, bukan untuk
+    galat yang pasti gagal lagi."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_api_key(self, monkeypatch):
+        monkeypatch.setattr(settings, "openrouter_api_key", "fake-key-for-tests")
+
+    async def test_retries_once_on_connection_error_then_succeeds(self, monkeypatch):
+        calls = {"n": 0}
+
+        async def fake_post(self, url, headers=None, json=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise httpx.ConnectError("koneksi gagal")
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "hasil"}}]},
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+        monkeypatch.setattr("app.llm._CHAT_RETRY_DELAY_SECONDS", 0)
+
+        content = await _chat([{"role": "user", "content": "x"}])
+        assert content == "hasil"
+        assert calls["n"] == 2
+
+    async def test_retries_once_on_timeout_then_succeeds(self, monkeypatch):
+        calls = {"n": 0}
+
+        async def fake_post(self, url, headers=None, json=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise httpx.ReadTimeout("timeout")
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "hasil"}}]},
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+        monkeypatch.setattr("app.llm._CHAT_RETRY_DELAY_SECONDS", 0)
+
+        content = await _chat([{"role": "user", "content": "x"}])
+        assert content == "hasil"
+        assert calls["n"] == 2
+
+    async def test_gives_up_after_sustained_connection_failure(self, monkeypatch):
+        async def fake_post(self, url, headers=None, json=None):
+            raise httpx.ConnectError("selalu gagal")
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+        monkeypatch.setattr("app.llm._CHAT_RETRY_DELAY_SECONDS", 0)
+
+        with pytest.raises(LLMError):
+            await _chat([{"role": "user", "content": "x"}])
+
+    async def test_retries_transient_5xx_then_succeeds(self, monkeypatch):
+        calls = {"n": 0}
+
+        async def fake_post(self, url, headers=None, json=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return httpx.Response(503, text="unavailable", request=httpx.Request("POST", url))
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "hasil"}}]},
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+        monkeypatch.setattr("app.llm._CHAT_RETRY_DELAY_SECONDS", 0)
+
+        content = await _chat([{"role": "user", "content": "x"}])
+        assert content == "hasil"
+        assert calls["n"] == 2
+
+    async def test_does_not_retry_non_transient_4xx(self, monkeypatch):
+        calls = {"n": 0}
+
+        async def fake_post(self, url, headers=None, json=None):
+            calls["n"] += 1
+            return httpx.Response(401, text="invalid key", request=httpx.Request("POST", url))
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+        monkeypatch.setattr("app.llm._CHAT_RETRY_DELAY_SECONDS", 0)
+
+        with pytest.raises(LLMError):
+            await _chat([{"role": "user", "content": "x"}])
+        # tidak dicoba ulang — 401 tidak akan berhasil walau diulang
+        assert calls["n"] == 1

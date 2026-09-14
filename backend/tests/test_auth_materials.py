@@ -49,11 +49,111 @@ class TestLogin:
         )
         assert res.status_code == 401
 
+    def test_rate_limited_after_five_attempts(self, client, sb):
+        sb.accounts["admin@sekolah.id"] = {
+            "password": "rahasia",
+            "id": "00000000-0000-0000-0000-000000000001",
+        }
+        for _ in range(5):
+            res = client.post(
+                "/api/auth/login",
+                json={"email": "admin@sekolah.id", "password": "salah"},
+            )
+            assert res.status_code == 401
+
+        res = client.post(
+            "/api/auth/login",
+            json={"email": "admin@sekolah.id", "password": "salah"},
+        )
+        assert res.status_code == 429
+        assert res.headers.get("retry-after") == "900"
+
+    def test_rate_limit_is_per_email(self, client, sb):
+        sb.accounts["admin@sekolah.id"] = {
+            "password": "rahasia",
+            "id": "00000000-0000-0000-0000-000000000001",
+        }
+        for _ in range(5):
+            client.post(
+                "/api/auth/login",
+                json={"email": "admin@sekolah.id", "password": "salah"},
+            )
+        # Email lain tidak terpengaruh oleh limit email di atas.
+        res = client.post(
+            "/api/auth/login",
+            json={"email": "lain@sekolah.id", "password": "salah"},
+        )
+        assert res.status_code == 401  # bukan 429
+
+    def test_rate_limit_key_is_case_insensitive(self, client, sb):
+        sb.accounts["admin@sekolah.id"] = {
+            "password": "rahasia",
+            "id": "00000000-0000-0000-0000-000000000001",
+        }
+        for _ in range(5):
+            client.post(
+                "/api/auth/login",
+                json={"email": "Admin@Sekolah.id", "password": "salah"},
+            )
+        res = client.post(
+            "/api/auth/login",
+            json={"email": "ADMIN@SEKOLAH.ID", "password": "salah"},
+        )
+        assert res.status_code == 429
+
+    def test_login_infra_failure_is_not_reported_as_wrong_password(
+        self, sb, monkeypatch
+    ):
+        from fastapi.testclient import TestClient
+        from supabase_auth.errors import AuthRetryableError
+
+        from app.main import app
+        from app.routers import auth as auth_router
+
+        def boom(creds):
+            raise AuthRetryableError("gangguan jaringan", 0)
+
+        monkeypatch.setattr(auth_router, "get_supabase", lambda: sb)
+        monkeypatch.setattr(auth_router, "get_fresh_client", lambda: sb)
+        monkeypatch.setattr(sb.auth, "sign_in_with_password", boom)
+        auth_router.limiter.reset()
+
+        no_raise_client = TestClient(app, raise_server_exceptions=False)
+        res = no_raise_client.post(
+            "/api/auth/login",
+            json={"email": "admin@sekolah.id", "password": "rahasia"},
+        )
+        assert res.status_code == 500
+
 
 class TestMaterials:
     def test_requires_token(self, client):
         res = client.get("/api/materials")
         assert res.status_code == 401
+
+    def test_get_user_infra_failure_is_not_reported_as_invalid_session(
+        self, sb, monkeypatch
+    ):
+        """Gangguan jaringan/server saat verifikasi token harus jadi 5xx
+        (galat umum), bukan disalahartikan sebagai token tidak valid (401) —
+        admin tidak perlu login ulang untuk masalah yang bukan salahnya."""
+        from fastapi.testclient import TestClient
+        from supabase_auth.errors import AuthRetryableError
+
+        from app.main import app
+        from app.routers import materials as materials_router
+
+        def boom(token):
+            raise AuthRetryableError("gangguan jaringan", 0)
+
+        monkeypatch.setattr(materials_router, "get_supabase", lambda: sb)
+        monkeypatch.setattr(sb.auth, "get_user", boom)
+
+        no_raise_client = TestClient(app, raise_server_exceptions=False)
+        res = no_raise_client.get(
+            "/api/materials", headers={"Authorization": "Bearer tok-apa-saja"}
+        )
+        assert res.status_code == 500
 
     def test_requires_admin_role(self, client, sb, monkeypatch):
         student_id = "00000000-0000-0000-0000-000000000002"

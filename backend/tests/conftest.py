@@ -2,6 +2,7 @@ import uuid
 
 import pytest
 from fastapi.testclient import TestClient
+from postgrest.exceptions import APIError
 
 
 class FakeResult:
@@ -54,11 +55,26 @@ class Query:
         if self.op == "insert":
             row = dict(self.row)
             row.setdefault("id", str(uuid.uuid4()))
+            for cols in self.sb.unique_constraints.get(self.table, []):
+                key = tuple(row.get(c) for c in cols)
+                if any(key == tuple(r.get(c) for c in cols) for r in rows):
+                    raise APIError(
+                        {
+                            "code": "23505",
+                            "message": f"duplicate key value violates unique constraint on {cols}",
+                        }
+                    )
             rows.append(row)
             return FakeResult([row])
         if self.op == "delete":
             removed = [r for r in rows if all(r.get(c) == v for c, v in self.filters)]
             self.sb.tables[self.table] = [r for r in rows if r not in removed]
+            for child_table, fk_col in self.sb.cascades.get(self.table, []):
+                ids = {r.get("id") for r in removed}
+                child_rows = self.sb.tables.setdefault(child_table, [])
+                self.sb.tables[child_table] = [
+                    r for r in child_rows if r.get(fk_col) not in ids
+                ]
             return FakeResult(removed)
         if self.op == "update":
             updated = []
@@ -127,6 +143,16 @@ class FakeSupabase:
     def __init__(self, tables=None):
         self.tables = {k: list(v) for k, v in (tables or {}).items()}
         self.auth = FakeAuth()
+        # Sebagian kecil constraint DB sungguhan ditegakkan di sini secara
+        # opsional — cukup yang dipakai test untuk membuktikan kode menangani
+        # error unique-violation (23505) dari PostgREST, bukan mengabaikannya.
+        self.unique_constraints: dict[str, list[tuple[str, ...]]] = {
+            "attempts": [("quiz_id", "client_id")],
+        }
+        # Meniru "on delete cascade" schema.sql: {tabel_induk: [(tabel_anak, kolom_fk)]}
+        self.cascades: dict[str, list[tuple[str, str]]] = {
+            "quizzes": [("attempts", "quiz_id")],
+        }
 
     @property
     def accounts(self):
@@ -171,6 +197,9 @@ def client(sb, monkeypatch):
     monkeypatch.setattr(materials_router, "get_supabase", lambda: sb)
     monkeypatch.setattr(quiz_router, "get_supabase", lambda: sb)
     monkeypatch.setattr(subjects_router, "get_supabase", lambda: sb)
+    # Limiter login bersifat module-level (bertahan antar test) — bersihkan
+    # supaya percobaan login di satu test tidak memengaruhi test lain.
+    auth_router.limiter.reset()
     return TestClient(app)
 
 

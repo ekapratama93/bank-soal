@@ -152,11 +152,13 @@ export class ApiError extends Error {
 const DEFAULT_TIMEOUT_MS = 20_000;
 
 /**
- * Pengumpulan jawaban memicu koreksi AI di server, jadi butuh tenggang jauh
- * lebih panjang (nginx sendiri memberi 300s). Membatalkan terlalu cepat justru
- * berbahaya: submit-nya sudah jalan di server, lalu klien mencoba ulang.
+ * Endpoint yang memicu panggilan AI di server butuh tenggang jauh lebih
+ * panjang (nginx sendiri memberi 300s) — dipakai submitQuiz (koreksi AI
+ * jawaban isian) dan generateBatch (bisa memanggil AI berkali-kali, hingga
+ * 5 paket sekaligus). Membatalkan terlalu cepat justru berbahaya: prosesnya
+ * sudah jalan di server, lalu klien mengira gagal dan mencoba ulang.
  */
-const SUBMIT_TIMEOUT_MS = 120_000;
+const LONG_TIMEOUT_MS = 120_000;
 
 interface RequestOptions {
   timeoutMs?: number;
@@ -265,11 +267,15 @@ export function generateBatch(
   token: string,
   data: { subject: string; grade: number; exam_type_id: string; jumlah_paket: number }
 ): Promise<{ generated: number; quiz_ids: string[] }> {
-  return request("/api/quiz/generate", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
+  return request(
+    "/api/quiz/generate",
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    },
+    { timeoutMs: LONG_TIMEOUT_MS }
+  );
 }
 
 export function getQuiz(quizId: string): Promise<QuizResponse> {
@@ -287,7 +293,7 @@ export function submitQuiz(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ answers }),
     },
-    { timeoutMs: SUBMIT_TIMEOUT_MS }
+    { timeoutMs: LONG_TIMEOUT_MS }
   );
 }
 

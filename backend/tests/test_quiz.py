@@ -1,6 +1,8 @@
 import copy
 from datetime import datetime, timedelta, timezone
 
+import httpx
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -401,6 +403,30 @@ class TestGetQuiz:
         res = client.get("/api/quiz/tidak-ada")
         assert res.status_code == 404
 
+    def test_concurrent_attempt_creation_does_not_500(self, sb):
+        """Dua request nyaris bersamaan untuk (quiz, client) yang sama bisa
+        lolos _get_attempt() yang sama-sama kosong, lalu berlomba insert.
+        Yang kalah harus mendapat baris si pemenang, bukan exception mentah
+        dari unique-violation (idx_attempts_quiz_client)."""
+        exam_type_fixture(sb)
+        quiz = insert_quiz(sb, "quiz-123", started=False)
+
+        first = quiz_router._create_attempt(sb, quiz, "client-a")
+        second = quiz_router._create_attempt(sb, quiz, "client-a")
+
+        assert second["id"] == first["id"]
+        assert len(sb.tables["attempts"]) == 1
+
+    def test_concurrent_attempt_creation_different_clients_both_succeed(self, sb):
+        exam_type_fixture(sb)
+        quiz = insert_quiz(sb, "quiz-123", started=False)
+
+        first = quiz_router._create_attempt(sb, quiz, "client-a")
+        second = quiz_router._create_attempt(sb, quiz, "client-b")
+
+        assert first["id"] != second["id"]
+        assert len(sb.tables["attempts"]) == 2
+
 
 class TestSubmit:
     def _open(self, client, quiz_id):
@@ -640,6 +666,45 @@ class TestSubmit:
         res = client.post("/api/quiz/tidak-ada/submit", json={"answers": {}})
         assert res.status_code == 404
 
+    def test_submit_rejects_too_many_answer_keys(self, client, sb):
+        exam_type_fixture(sb)
+        insert_quiz(sb, "quiz-123")
+        answers = {str(i): "x" for i in range(quiz_router.MAX_ANSWER_KEYS + 1)}
+        res = client.post("/api/quiz/quiz-123/submit", json={"answers": answers})
+        assert res.status_code == 422
+
+    def test_submit_rejects_oversized_answer_value(self, client, sb):
+        exam_type_fixture(sb)
+        insert_quiz(sb, "quiz-123")
+        res = client.post(
+            "/api/quiz/quiz-123/submit",
+            json={"answers": {"0": "x" * (quiz_router.MAX_ANSWER_VALUE_LENGTH + 1)}},
+        )
+        assert res.status_code == 422
+
+    def test_submit_rejects_nested_answer_value(self, client, sb):
+        exam_type_fixture(sb)
+        insert_quiz(sb, "quiz-123")
+        res = client.post(
+            "/api/quiz/quiz-123/submit",
+            json={"answers": {"0": {"nested": "object"}}},
+        )
+        assert res.status_code == 422
+
+    def test_submit_accepts_answers_within_bounds(self, client, sb, monkeypatch):
+        exam_type_fixture(sb)
+        insert_quiz(sb, "quiz-123")
+
+        async def fake_grade(items):
+            return {2: {"verdict": "benar", "skor": 1.0, "umpan_balik": "Benar"}}
+
+        monkeypatch.setattr(quiz_router, "grade_short_answers", fake_grade)
+        res = client.post(
+            "/api/quiz/quiz-123/submit",
+            json={"answers": {"0": 1, "1": "benar", "2": "Jakarta"}},
+        )
+        assert res.status_code == 200
+
     def test_submit_llm_error_returns_502(self, client, sb, monkeypatch):
         exam_type_fixture(sb)
         insert_quiz(sb, "quiz-123")
@@ -858,6 +923,45 @@ class TestResolveImages:
         q = self._question()
         await quiz_router._resolve_images(sb, [q])
         assert "gambar" not in q
+
+    async def test_network_failure_skips_gracefully_not_whole_batch(self, monkeypatch, sb):
+        """Kegagalan koneksi sungguhan (bukan generate_image yang di-stub)
+        pada satu soal tidak boleh menggagalkan pembuatan gambar soal lain
+        dalam batch yang sama — menguji generate_image() + _resolve_images()
+        bersama-sama, bukan cuma penanganan ImageGenError yang sudah teruji
+        di test_generation_error_skips_gracefully."""
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "openrouter_api_key", "fake-key-for-tests")
+
+        async def flaky_post(self, url, headers=None, json=None):
+            if json["messages"][0]["content"] == "gambar-bermasalah":
+                raise httpx.ConnectError("koneksi gagal")
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "images": [
+                                    {"image_url": {"url": "data:image/png;base64,YQ=="}}
+                                ]
+                            }
+                        }
+                    ]
+                },
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", flaky_post)
+        monkeypatch.setattr(
+            quiz_router, "upload_image_bytes", lambda sb, data, ct: "http://img/ok.png"
+        )
+        bad = self._question(gambar_tipe="generated", gambar_prompt="gambar-bermasalah")
+        good = self._question(gambar_tipe="generated", gambar_prompt="gambar-oke")
+        await quiz_router._resolve_images(sb, [bad, good])
+        assert "gambar" not in bad
+        assert good["gambar"] == "http://img/ok.png"
 
     async def test_cap_limits_number_of_images_per_paket(self, monkeypatch, sb):
         calls = []

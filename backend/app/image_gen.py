@@ -26,7 +26,15 @@ async def generate_image(prompt: str) -> tuple[bytes, str]:
         "modalities": ["image", "text"],
     }
     async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(settings.openrouter_url, headers=headers, json=payload)
+        try:
+            resp = await client.post(settings.openrouter_url, headers=headers, json=payload)
+        except httpx.RequestError as e:
+            # Tanpa ini, gagal terhubung merambat sebagai exception tak
+            # tertangani dan menggagalkan SELURUH batch pembuatan paket soal —
+            # bukan cuma gambar soal ini (lihat _resolve_images di quiz.py,
+            # yang hanya menangkap ImageGenError).
+            logger.warning("Koneksi ke OpenRouter (gambar) gagal: %s", e)
+            raise ImageGenError("Gagal terhubung ke layanan AI gambar.") from e
         if resp.status_code != 200:
             logger.warning("OpenRouter image error %s: %s", resp.status_code, resp.text[:500])
             raise ImageGenError("Gagal membuat gambar dari layanan AI.")

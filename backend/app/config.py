@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,6 +14,20 @@ class Settings(BaseSettings):
     frontend_origin: str = "http://localhost:5173"
 
     openrouter_url: str = "https://openrouter.ai/api/v1/chat/completions"
+
+    @field_validator("supabase_url", "openrouter_url")
+    @classmethod
+    def _must_be_http_url_if_set(cls, v: str, info) -> str:
+        # Kosong tetap boleh — itu ditangani terpisah (RuntimeError → 503,
+        # lihat supabase_client.py) sebagai "belum dikonfigurasi". Tapi nilai
+        # yang DIISI namun salah bentuk (typo .env) sebelumnya baru gagal
+        # secara samar pada request pertama yang memakainya, lama setelah
+        # deploy. Gagal cepat di sini, saat proses dimulai.
+        if v and not (v.startswith("http://") or v.startswith("https://")):
+            raise ValueError(
+                f"{info.field_name} harus berupa URL http(s):// yang valid, dapat: {v!r}"
+            )
+        return v
 
 
 settings = Settings()

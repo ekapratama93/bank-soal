@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel, Field
+from supabase_auth.errors import AuthRetryableError
 
-from ..file_extract import FileExtractError, extract_text
+from ..file_extract import MAX_FILE_BYTES, FileExtractError, extract_text
 from ..supabase_client import get_supabase
 
 router = APIRouter(prefix="/api/materials", tags=["materials"])
@@ -14,6 +15,11 @@ def require_admin(authorization: str | None = Header(default=None)) -> dict:
     sb = get_supabase()
     try:
         user = sb.auth.get_user(token).user
+    except AuthRetryableError:
+        # Gangguan jaringan/server Supabase — bukan token invalid. Biarkan
+        # jadi 5xx (handler galat umum di main.py) alih-alih salah melaporkan
+        # "sesi tidak valid" dan menyuruh admin login ulang tanpa gunanya.
+        raise
     except Exception:
         raise HTTPException(status_code=401, detail="Sesi tidak valid, silakan login ulang")
     if not user:
@@ -126,7 +132,15 @@ async def upload_material(
     parts = []
     file_name = None
     if file is not None and file.filename:
-        data = await file.read()
+        # Baca terbatas, bukan file.read() tanpa batas — supaya unggahan raksasa
+        # tidak dulu masuk seluruhnya ke memori sebelum pengecekan ukuran di
+        # extract_text() sempat menolaknya.
+        data = await file.read(MAX_FILE_BYTES + 1)
+        if len(data) > MAX_FILE_BYTES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Ukuran file melebihi {MAX_FILE_BYTES // (1024 * 1024)} MB.",
+            )
         try:
             parts.append(extract_text(file.filename, data))
             file_name = file.filename

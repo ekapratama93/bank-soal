@@ -179,3 +179,4 @@ Setelah jalan, frontend mem-proxy `/api` ke backend lewat private networking (`B
 - Jawaban yang sedang dikerjakan disimpan sebagai draf di perangkat (localStorage) dan dipulihkan saat halaman dibuka ulang. Timer memakai jam server (header `Date`), jadi jam perangkat yang meleset tidak memengaruhi sisa waktu.
 - Menghapus tipe ujian atau mata pelajaran ditolak bila masih dipakai materi atau kuis; pindahkan/hapus materinya atau Reset Pool dulu.
 - Menghapus paket soal individual (Panel Admin → tab Kuis) juga menghapus riwayat attempt paket tersebut — konfirmasi ditampilkan lebih dulu untuk paket yang sudah pernah dibuka siswa.
+- Login admin dibatasi 5 percobaan per 15 menit per alamat email (server, `backend/app/routers/auth.py`) — mencegah tebak-tebak password bertubi-tubi. Batas ini hidup selama proses backend berjalan (reset saat restart).
