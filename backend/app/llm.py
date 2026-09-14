@@ -254,29 +254,67 @@ async def generate_quiz(
     ) from last_error
 
 
-async def grade_short_answers(
-    items: list[dict],
-) -> dict[int, dict]:
+# Jumlah item deskripsi maksimum per satu panggilan AI. Paket dengan lebih
+# banyak item dibagi ke beberapa batch dan dinilai SEKALIGUS (lihat
+# grade_short_answers) — waktu tunggu jadi mendekati satu batch terbesar,
+# bukan jumlah semua item digabung jadi satu generasi panjang berurutan.
+GRADE_BATCH_SIZE = 4
+
+
+async def grade_short_answers(items: list[dict]) -> dict[int, dict]:
     """items: [{index, tipe, pertanyaan, jawaban_model, jawaban_siswa}]
+
+    Semuanya bertipe "deskripsi" — soal isian singkat dinilai lokal lewat
+    text_match.py (perbandingan string), bukan lewat AI (lihat submit() di
+    routers/quiz.py). Fungsi ini hanya untuk uraian/deskripsi, yang memang
+    butuh penilaian kelengkapan & ketepatan isi, bukan sekadar cocok-tidaknya
+    string.
+
+    Untuk paket dengan banyak soal deskripsi (jarang — komposisi otomatis
+    tidak pernah menyertakan deskripsi, ini hanya terjadi kalau admin
+    mengatur tipe_soal khusus), item dibagi ke beberapa batch kecil dan
+    dinilai PARALEL lewat asyncio.gather, bukan satu panggilan AI besar
+    berurutan — jauh lebih cepat secara wall-clock untuk paket seperti itu.
 
     Returns {index: {verdict, skor, umpan_balik}}.
     """
     if not items:
         return {}
+    if len(items) <= GRADE_BATCH_SIZE:
+        return await _grade_batch(items)
+
+    batches = [
+        items[i : i + GRADE_BATCH_SIZE] for i in range(0, len(items), GRADE_BATCH_SIZE)
+    ]
+    # return_exceptions=True: tunggu semua batch selesai (baik gagal maupun
+    # sukses) sebelum memutuskan, alih-alih membiarkan sebagian batch masih
+    # berjalan di latar belakang (memanggil AI sia-sia) begitu batch lain
+    # gagal duluan.
+    results = await asyncio.gather(
+        *(_grade_batch(b) for b in batches), return_exceptions=True
+    )
+    merged: dict[int, dict] = {}
+    for r in results:
+        if isinstance(r, BaseException):
+            raise r
+        merged.update(r)
+    return merged
+
+
+async def _grade_batch(items: list[dict]) -> dict[int, dict]:
+    """Satu panggilan AI untuk sekelompok item deskripsi — lihat
+    grade_short_answers() untuk pembagian batch & paralelisasi."""
     prompt = (
-        "Anda guru yang mengoreksi jawaban siswa sekolah Indonesia. "
-        "Untuk setiap item, nilai jawaban siswa dibanding jawaban model:\n"
-        '- "benar" (skor 1.0): inti jawaban tepat\n'
-        '- "parsial" (skor 0.1-0.9): sebagian benar\n'
-        '- "salah" (skor 0.0): salah atau kosong\n'
-        "Untuk soal isian singkat, toleransi kecil pada salah ketik/ejaan. "
-        "Untuk soal uraian/deskripsi, nilai kelengkapan dan ketepatan isi — "
-        "jawaban siswa tidak harus sama kata per kata dengan jawaban model; "
-        "jawaban kosong atau tidak relevan bernilai salah.\n"
-        "Umpan balik dalam Bahasa Indonesia: singkat untuk isian singkat; "
-        "untuk uraian/deskripsi berisi koreksi AI — sebutkan poin/ide yang sudah "
-        "tepat dari jawaban siswa dan poin penting dari jawaban model yang belum "
-        "atau kurang dicantumkan (1-3 kalimat).\n\n"
+        "Anda guru yang mengoreksi jawaban uraian/deskripsi siswa sekolah "
+        "Indonesia. Untuk setiap item, nilai kelengkapan dan ketepatan isi "
+        "jawaban siswa dibanding jawaban model — jawaban siswa tidak harus "
+        "sama kata per kata dengan jawaban model:\n"
+        '- "benar" (skor 1.0): isi lengkap dan tepat\n'
+        '- "parsial" (skor 0.1-0.9): sebagian benar/lengkap\n'
+        '- "salah" (skor 0.0): salah, kosong, atau tidak relevan\n'
+        "Umpan balik dalam Bahasa Indonesia berisi koreksi AI — sebutkan "
+        "poin/ide yang sudah tepat dari jawaban siswa dan poin penting dari "
+        "jawaban model yang belum atau kurang dicantumkan (1-3 kalimat).\n\n"
         "Item jawaban:\n"
         f"{json.dumps(items, ensure_ascii=False)}\n\n"
         "Balas HANYA JSON valid:\n"
@@ -334,5 +372,5 @@ async def grade_short_answers(
                 },
             ]
     raise LLMError(
-        "Gagal mengoreksi jawaban isian. Coba kumpulkan ulang beberapa saat lagi."
+        "Gagal mengoreksi jawaban uraian. Coba kumpulkan ulang beberapa saat lagi."
     ) from last_error

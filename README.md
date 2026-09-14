@@ -1,6 +1,6 @@
 # Bank Soal
 
-Aplikasi pembuat soal latihan sekolah dengan bantuan AI (OpenRouter). Siswa memilih mata pelajaran + kelas + tipe ujian, aplikasi menyajikan paket soal campuran (pilihan ganda, benar/salah, isian), timer countdown, penilaian otomatis + koreksi AI untuk soal isian, dan riwayat hasil tersimpan di browser.
+Aplikasi pembuat soal latihan sekolah dengan bantuan AI (OpenRouter). Siswa memilih mata pelajaran + kelas + tipe ujian, aplikasi menyajikan paket soal campuran (pilihan ganda, benar/salah, isian), timer countdown, penilaian otomatis (isian dicocokkan lokal, uraian/deskripsi dikoreksi AI), dan riwayat hasil tersimpan di browser.
 
 **Semua teks UI, soal, dan pembahasan dalam Bahasa Indonesia.**
 
@@ -180,3 +180,6 @@ Setelah jalan, frontend mem-proxy `/api` ke backend lewat private networking (`B
 - Menghapus tipe ujian atau mata pelajaran ditolak bila masih dipakai materi atau kuis; pindahkan/hapus materinya atau Reset Pool dulu.
 - Menghapus paket soal individual (Panel Admin → tab Kuis) juga menghapus riwayat attempt paket tersebut — konfirmasi ditampilkan lebih dulu untuk paket yang sudah pernah dibuka siswa.
 - Login admin dibatasi 5 percobaan per 15 menit per alamat email (server, `backend/app/routers/auth.py`) — mencegah tebak-tebak password bertubi-tubi. Batas ini hidup selama proses backend berjalan (reset saat restart).
+- Soal **isian** dinilai lokal lewat pencocokan string (toleransi kecil pada salah ketik/ejaan, `backend/app/text_match.py`), bukan lewat AI — tidak ada nilai parsial untuk isian (benar/salah). Hanya soal **uraian/deskripsi** yang dikoreksi AI, karena itu yang sungguh butuh penilaian kelengkapan & ketepatan isi. Perubahan ini mempercepat pengumpulan secara signifikan untuk paket yang komposisinya banyak isian.
+- Kalau satu paket punya banyak soal uraian/deskripsi (komposisi khusus dari admin — komposisi otomatis tidak pernah menyertakan deskripsi), soal-soal itu dinilai AI dalam beberapa batch **paralel** (maks 4 soal per panggilan, `backend/app/llm.py` `GRADE_BATCH_SIZE`), bukan satu panggilan besar berurutan — waktu tunggu mendekati satu batch terbesar, bukan jumlah semua soal digabung.
+- Jawaban isian berupa **angka** dibandingkan sebagai nilai, bukan string — notasi ribuan/desimal Indonesia ("1.000", "0,25") vs internasional ("1000", "0.25"), serta pecahan ("1/2" = "0.5" = "0,5"), semuanya dianggap sama asal nilainya sama.

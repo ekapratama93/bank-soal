@@ -434,30 +434,51 @@ class TestSubmit:
         assert res.status_code == 200
         return res
 
-    def test_submit_autograde_and_llm_grade(self, client, sb, monkeypatch):
+    def test_submit_autograde_pg_bs_and_local_isian(self, client, sb, monkeypatch):
+        """Isian dinilai lokal (text_match.py) — quiz tanpa soal deskripsi
+        tidak boleh memanggil AI sama sekali. Ini yang membuat pengumpulan
+        cepat: sebelumnya SETIAP isian ikut satu panggilan AI bersama."""
         exam_type_fixture(sb)
         insert_quiz(sb, "quiz-123")
         self._open(client, "quiz-123")
 
-        async def fake_grade(items):
-            assert len(items) == 1
-            assert items[0]["index"] == 2
-            assert items[0]["jawaban_model"] == "Jakarta"
-            return {2: {"verdict": "parsial", "skor": 0.5, "umpan_balik": "Hampir tepat"}}
+        async def fail_if_called(items):
+            raise AssertionError(f"AI tidak boleh dipanggil untuk isian: {items}")
 
-        monkeypatch.setattr(quiz_router, "grade_short_answers", fake_grade)
+        monkeypatch.setattr(quiz_router, "grade_short_answers", fail_if_called)
 
         res = client.post(
             "/api/quiz/quiz-123/submit",
+            # "jakarta" (huruf kecil) — toleransi kecil ejaan, tetap "benar".
             json={"answers": {"0": 1, "1": "benar", "2": "jakarta"}},
         )
         assert res.status_code == 200
         body = res.json()
-        assert body["nilai"] == 83
+        assert body["nilai"] == 100
         assert body["expired"] is False
         assert body["exam_type"] == "Ujian Harian"
         verdicts = [pq["verdict"] for pq in body["per_question"]]
-        assert verdicts == ["benar", "benar", "parsial"]
+        assert verdicts == ["benar", "benar", "benar"]
+
+    def test_submit_isian_wrong_answer_graded_locally(self, client, sb, monkeypatch):
+        exam_type_fixture(sb)
+        insert_quiz(sb, "quiz-123")
+        self._open(client, "quiz-123")
+
+        async def fail_if_called(items):
+            raise AssertionError("AI tidak boleh dipanggil untuk isian")
+
+        monkeypatch.setattr(quiz_router, "grade_short_answers", fail_if_called)
+        res = client.post(
+            "/api/quiz/quiz-123/submit",
+            json={"answers": {"0": 1, "1": "benar", "2": "Bandung"}},
+        )
+        assert res.status_code == 200
+        body = res.json()
+        pq_isian = body["per_question"][2]
+        assert pq_isian["verdict"] == "salah"
+        assert pq_isian["skor"] == 0.0
+        assert pq_isian["jawaban_benar"] == "Jakarta"
         assert sb.tables["attempts"][0]["quiz_id"] == "quiz-123"
 
     def test_submit_deskripsi_graded_by_ai(self, client, sb, monkeypatch):
@@ -706,12 +727,21 @@ class TestSubmit:
         assert res.status_code == 200
 
     def test_submit_llm_error_returns_502(self, client, sb, monkeypatch):
+        """Isian tidak lagi memanggil AI (dinilai lokal) — pakai soal
+        deskripsi supaya galat AI sungguh teruji di jalur yang masih
+        memakainya."""
         exam_type_fixture(sb)
-        insert_quiz(sb, "quiz-123")
+        quiz = insert_quiz(sb, "quiz-123")
+        quiz["questions"][2] = {
+            "tipe": "deskripsi",
+            "pertanyaan": "Jelaskan proses fotosintesis.",
+            "jawaban": "Tumbuhan mengubah cahaya matahari menjadi energi kimia.",
+            "pembahasan": "Fotosintesis mengubah CO2 dan air menjadi glukosa dan oksigen.",
+        }
         self._open(client, "quiz-123")
 
         async def fake_grade(items):
-            raise quiz_router.LLMError("Gagal mengoreksi jawaban isian.")
+            raise quiz_router.LLMError("Gagal mengoreksi jawaban uraian.")
 
         monkeypatch.setattr(quiz_router, "grade_short_answers", fake_grade)
         res = client.post("/api/quiz/quiz-123/submit", json={"answers": {"2": "x"}})
@@ -719,9 +749,17 @@ class TestSubmit:
 
     def test_submit_twice_is_idempotent(self, client, sb, monkeypatch):
         """Percobaan ulang (respons pertama hilang di jaringan) mengembalikan
-        hasil tersimpan tanpa menilai ulang dan tanpa menimpa nilai."""
+        hasil tersimpan tanpa menilai ulang dan tanpa menimpa nilai. Pakai
+        soal deskripsi supaya jalur AI (yang harus dipanggil hanya sekali)
+        sungguh teruji — isian sendiri kini dinilai lokal."""
         exam_type_fixture(sb)
-        insert_quiz(sb, "quiz-123")
+        quiz = insert_quiz(sb, "quiz-123")
+        quiz["questions"][2] = {
+            "tipe": "deskripsi",
+            "pertanyaan": "Jelaskan proses fotosintesis.",
+            "jawaban": "Tumbuhan mengubah cahaya matahari menjadi energi kimia.",
+            "pembahasan": "Fotosintesis mengubah CO2 dan air menjadi glukosa dan oksigen.",
+        }
         self._open(client, "quiz-123")
 
         calls = []
@@ -734,7 +772,7 @@ class TestSubmit:
 
         first = client.post(
             "/api/quiz/quiz-123/submit",
-            json={"answers": {"0": 1, "1": "benar", "2": "jakarta"}},
+            json={"answers": {"0": 1, "1": "benar", "2": "Tumbuhan mengubah cahaya jadi energi"}},
         )
         assert first.status_code == 200
         submitted_at = sb.tables["attempts"][0]["submitted_at"]
@@ -751,7 +789,7 @@ class TestSubmit:
         assert sb.tables["attempts"][0]["answers"] == {
             "0": 1,
             "1": "benar",
-            "2": "jakarta",
+            "2": "Tumbuhan mengubah cahaya jadi energi",
         }
 
 

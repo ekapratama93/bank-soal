@@ -12,6 +12,7 @@ from ..image_gen import ImageGenError, generate_image
 from ..image_search import search_stock_image
 from ..image_store import upload_image_bytes
 from ..llm import LLMError, _split_counts, generate_quiz, grade_short_answers
+from ..text_match import grade_isian
 from ..subjects import VALID_GRADES
 from ..supabase_client import get_supabase
 from .materials import require_admin
@@ -674,9 +675,13 @@ async def submit(
     expires_at = datetime.fromisoformat(attempt["expires_at"])
     expired = expires_at < now
 
+    # Isian dinilai lokal (perbandingan string, lihat text_match.py) —
+    # cuma soal deskripsi/uraian yang sungguh butuh penilaian AI (kelengkapan
+    # & ketepatan isi, bukan sekadar cocok-tidaknya string). Ini yang bikin
+    # batch ke AI jauh lebih kecil dan pengumpulan jawaban jauh lebih cepat.
     short_items: list[dict] = []
     for i, q in enumerate(questions):
-        if q["tipe"] in ("isian", "deskripsi"):
+        if q["tipe"] == "deskripsi":
             jawaban_siswa = str(body.answers.get(str(i), "") or "").strip()
             short_items.append(
                 {
@@ -688,10 +693,15 @@ async def submit(
                 }
             )
 
-    try:
-        short_results = await grade_short_answers(short_items)
-    except LLMError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    short_results: dict[int, dict] = {}
+    if short_items:
+        # Lewati panggilan AI sama sekali kalau tidak ada soal deskripsi —
+        # bukan cuma soal performa, juga supaya paket tanpa uraian tidak
+        # pernah gagal (502) gara-gara AI, padahal tidak butuh AI sama sekali.
+        try:
+            short_results = await grade_short_answers(short_items)
+        except LLMError as e:
+            raise HTTPException(status_code=502, detail=str(e))
 
     per_question = []
     total_poin_dapat = 0.0
@@ -722,7 +732,13 @@ async def submit(
             umpan_balik = "Jawaban benar." if benar else "Jawaban tidak tepat."
             jawaban_benar = q["jawaban"]
             jawaban_siswa = jawaban if jawaban in ("benar", "salah") else "-"
-        else:
+        elif tipe == "isian":
+            jawaban_siswa_str = str(jawaban).strip() if jawaban else ""
+            verdict, skor = grade_isian(jawaban_siswa_str, q["jawaban"])
+            umpan_balik = "Jawaban benar." if verdict == "benar" else "Jawaban tidak tepat."
+            jawaban_benar = q["jawaban"]
+            jawaban_siswa = jawaban_siswa_str or "-"
+        else:  # deskripsi — dinilai AI (lihat short_items di atas)
             hasil = short_results.get(i)
             if hasil:
                 verdict = hasil["verdict"]

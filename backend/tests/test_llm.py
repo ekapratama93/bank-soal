@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import httpx
@@ -401,3 +402,132 @@ class TestChat:
             await _chat([{"role": "user", "content": "x"}])
         # tidak dicoba ulang — 401 tidak akan berhasil walau diulang
         assert calls["n"] == 1
+
+
+class TestGradeShortAnswersBatching:
+    """Item deskripsi lebih dari GRADE_BATCH_SIZE dibagi ke beberapa batch
+    dan dinilai PARALEL (asyncio.gather), bukan satu panggilan AI besar
+    berurutan — lihat grade_short_answers() di llm.py."""
+
+    def _item(self, i):
+        return {
+            "index": i,
+            "tipe": "deskripsi",
+            "pertanyaan": f"Soal {i}",
+            "jawaban_model": f"jawaban model {i}",
+            "jawaban_siswa": f"jawaban siswa {i}",
+        }
+
+    def _items_in_prompt(self, messages):
+        """Baca kembali daftar item yang sungguh dikirim di prompt — jangan
+        cocokkan substring pada "index": N, karena "index": 1 adalah
+        substring dari "index": 10 (dan seterusnya)."""
+        content = messages[-1]["content"]
+        start = content.index("Item jawaban:\n") + len("Item jawaban:\n")
+        end = content.index("\n\nBalas HANYA JSON valid:")
+        return json.loads(content[start:end])
+
+    def _hasil_for(self, items):
+        return json.dumps(
+            {
+                "hasil": [
+                    {
+                        "index": it["index"],
+                        "verdict": "benar",
+                        "skor": 1.0,
+                        "umpan_balik": "ok",
+                    }
+                    for it in items
+                ]
+            }
+        )
+
+    async def test_small_batch_uses_single_call(self, monkeypatch):
+        items = [self._item(i) for i in range(4)]  # == GRADE_BATCH_SIZE
+        calls = []
+
+        async def fake_chat(messages):
+            calls.append(messages)
+            return self._hasil_for(items)
+
+        monkeypatch.setattr("app.llm._chat", fake_chat)
+        result = await grade_short_answers(items)
+        assert len(calls) == 1
+        assert len(result) == 4
+
+    async def test_large_batch_splits_into_multiple_calls(self, monkeypatch):
+        items = [self._item(i) for i in range(10)]  # > GRADE_BATCH_SIZE (4)
+        batches_seen = []
+
+        async def fake_chat(messages):
+            batch_items = self._items_in_prompt(messages)
+            batches_seen.append(batch_items)
+            return self._hasil_for(batch_items)
+
+        monkeypatch.setattr("app.llm._chat", fake_chat)
+        result = await grade_short_answers(items)
+
+        # 10 item / 4 per batch -> 3 panggilan (4, 4, 2), bukan 1 panggilan besar.
+        assert len(batches_seen) == 3
+        assert sorted(len(b) for b in batches_seen) == [2, 4, 4]
+        # Semua index tetap lengkap setelah digabung dari beberapa batch.
+        assert set(result.keys()) == {i for i in range(10)}
+
+    async def test_batches_run_concurrently_not_sequentially(self, monkeypatch):
+        items = [self._item(i) for i in range(8)]  # -> 2 batch
+        in_flight = 0
+        max_in_flight = 0
+
+        async def fake_chat(messages):
+            nonlocal in_flight, max_in_flight
+            in_flight += 1
+            max_in_flight = max(max_in_flight, in_flight)
+            await asyncio.sleep(0.05)  # beri waktu supaya batch lain sempat mulai
+            batch_items = self._items_in_prompt(messages)
+            in_flight -= 1
+            return self._hasil_for(batch_items)
+
+        monkeypatch.setattr("app.llm._chat", fake_chat)
+        await grade_short_answers(items)
+
+        # Kalau berurutan, max_in_flight akan selalu 1. Paralel -> keduanya
+        # sempat berjalan bersamaan.
+        assert max_in_flight == 2
+
+    async def test_one_failing_batch_raises_llm_error(self, monkeypatch):
+        items = [self._item(i) for i in range(8)]  # -> 2 batch
+
+        async def fake_chat(messages):
+            batch_items = self._items_in_prompt(messages)
+            if any(it["index"] == 0 for it in batch_items):
+                raise LLMError("batch pertama gagal")
+            return self._hasil_for(batch_items)
+
+        monkeypatch.setattr("app.llm._chat", fake_chat)
+        with pytest.raises(LLMError):
+            await grade_short_answers(items)
+
+    async def test_merged_results_preserve_correct_scores_per_item(self, monkeypatch):
+        items = [self._item(i) for i in range(6)]  # -> 2 batch (4, 2)
+
+        async def fake_chat(messages):
+            batch_items = self._items_in_prompt(messages)
+            return json.dumps(
+                {
+                    "hasil": [
+                        {
+                            "index": it["index"],
+                            "verdict": "parsial",
+                            "skor": it["index"] / 10,
+                            "umpan_balik": f"catatan {it['index']}",
+                        }
+                        for it in batch_items
+                    ]
+                }
+            )
+
+        monkeypatch.setattr("app.llm._chat", fake_chat)
+        result = await grade_short_answers(items)
+        for i in range(6):
+            assert result[i]["skor"] == i / 10
+            assert result[i]["umpan_balik"] == f"catatan {i}"
