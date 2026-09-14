@@ -32,6 +32,7 @@ import {
 import { GRADES } from "../subjects";
 import { QUESTION_TYPE_OPTIONS } from "@/lib/questionTypes";
 import { formatDate } from "../storage/results";
+import { applySeo } from "../lib/seo";
 import {
   Card,
   CardContent,
@@ -150,6 +151,10 @@ export default function Admin() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loginError, setLoginError] = useState<string | null>(null);
+
+  useEffect(() => {
+    applySeo({ title: "Panel Admin", noindex: true });
+  }, []);
 
   const [examTypes, setExamTypes] = useState<ExamType[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);

@@ -7,10 +7,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { cn } from "@/lib/utils";
 import { SCORE_RING_CLASS, scoreLevel } from "@/lib/score";
+import { applySeo } from "../lib/seo";
 
 export default function History() {
   const [attempts, setAttempts] = useState<AttemptResult[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    applySeo({ title: "Riwayat Hasil Latihan" });
+  }, []);
 
   useEffect(() => {
     getAttempts()

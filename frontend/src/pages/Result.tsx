@@ -23,6 +23,7 @@ import { NavigatorGrid, NavigatorLegend, type NavigatorItem } from "@/components
 import { cn } from "@/lib/utils";
 import { SCORE_MESSAGE, SCORE_RING_CLASS, scoreLevel } from "@/lib/score";
 import { QUESTION_TYPE_LABELS } from "@/lib/questionTypes";
+import { applySeo } from "../lib/seo";
 import type { PerQuestionResult, Verdict } from "@/api/client";
 
 const NAV_LEGEND = [
@@ -136,6 +137,10 @@ export default function Result() {
   const [missing, setMissing] = useState(false);
   const [current, setCurrent] = useState(0);
   const [navOpen, setNavOpen] = useState(false);
+
+  useEffect(() => {
+    applySeo({ title: "Hasil Ujian", noindex: true });
+  }, []);
 
   const fresh = useMemo<AttemptResult | null>(() => {
     const state = location.state as { result?: AttemptResult } | null;
