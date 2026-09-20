@@ -6,7 +6,9 @@ server {
     index index.html;
 
     location /api {
-        proxy_pass ${BACKEND_SCHEME}://${BACKEND_HOST}:${BACKEND_PORT};
+        resolver ${RESOLVER} valid=10s;
+        set $backend_upstream "${BACKEND_SCHEME}://${BACKEND_HOST}:${BACKEND_PORT}";
+        proxy_pass $backend_upstream;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_ssl_server_name on;
