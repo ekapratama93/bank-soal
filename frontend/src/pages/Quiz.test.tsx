@@ -24,6 +24,7 @@ const attemptsMock = vi.mocked(getAttempts);
 function quizResponse(expiresInMs = 30 * 60_000) {
   return {
     quiz_id: "q1",
+    subject_id: "sub-4",
     subject: "IPA",
     grade: 5,
     exam_type: "Ujian Harian",
@@ -89,6 +90,7 @@ describe("halaman ujian", () => {
     attemptsMock.mockResolvedValue([
       {
         quiz_id: "q1",
+        subject_id: "sub-4",
         subject: "IPA",
         grade: 5,
         exam_type: "Ujian Harian",

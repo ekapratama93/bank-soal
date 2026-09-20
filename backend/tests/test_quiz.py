@@ -40,10 +40,11 @@ def exam_type_fixture(sb):
     )
 
 
-def insert_quiz(sb, quiz_id, started=False, expires_in_minutes=60, exam_type_id=EXAM_TYPE_ID):
+def insert_quiz(sb, quiz_id, started=False, expires_in_minutes=60, exam_type_id=EXAM_TYPE_ID, subject="Matematika", subject_id="sub-1"):
     row = {
         "id": quiz_id,
-        "subject": "Matematika",
+        "subject": subject,
+        "subject_id": subject_id,
         "grade": 3,
         "exam_type_id": exam_type_id,
         "questions": copy.deepcopy(QUESTIONS),
@@ -138,6 +139,7 @@ class TestGenerate:
         sb.tables["materials"] = [
             {
                 "subject": "Matematika",
+                "subject_id": "sub-1",
                 "grade": 3,
                 "exam_type_id": EXAM_TYPE_ID,
                 "title": "A",
@@ -162,6 +164,7 @@ class TestGenerate:
         sb.tables["materials"] = [
             {
                 "subject": "Matematika",
+                "subject_id": "sub-1",
                 "grade": 3,
                 "exam_type_id": EXAM_TYPE_ID,
                 "title": "Perkalian",
@@ -200,6 +203,73 @@ class TestGenerate:
         stored = sb.tables["quizzes"][0]
         assert stored["questions"][0]["jawaban"] == 1
         assert stored["exam_type_id"] == EXAM_TYPE_ID
+
+    def test_generate_with_subject_id(self, client, sb, admin_auth, admin_headers, monkeypatch):
+        """Payload baru: subject_id menang — LLM tetap menerima NAMA mapel
+        (prompt AI butuh nama, bukan id), dan baris tersimpan menulis keduanya."""
+        exam_type_fixture(sb)
+
+        async def fake_generate(subject, grade, counts, material):
+            assert subject == "Matematika"  # nama, bukan "sub-1"
+            return copy.deepcopy(QUESTIONS)
+
+        monkeypatch.setattr(quiz_router, "generate_quiz", fake_generate)
+        res = client.post(
+            "/api/quiz/generate",
+            headers=admin_headers,
+            json={"subject_id": "sub-1", "grade": 3, "exam_type_id": EXAM_TYPE_ID},
+        )
+        assert res.status_code == 200
+        assert res.json()["generated"] == 3
+        for q in sb.tables["quizzes"]:
+            assert q["subject_id"] == "sub-1"
+            assert q["subject"] == "Matematika"
+
+    def test_generate_both_fields_subject_id_wins(self, client, sb, admin_auth, admin_headers, monkeypatch):
+        exam_type_fixture(sb)
+
+        async def fake_generate(subject, grade, counts, material):
+            assert subject == "Matematika"
+            return copy.deepcopy(QUESTIONS)
+
+        monkeypatch.setattr(quiz_router, "generate_quiz", fake_generate)
+        res = client.post(
+            "/api/quiz/generate",
+            headers=admin_headers,
+            json={"subject": "IPA", "subject_id": "sub-1", "grade": 3, "exam_type_id": EXAM_TYPE_ID},
+        )
+        assert res.status_code == 200
+        assert sb.tables["quizzes"][0]["subject_id"] == "sub-1"
+
+    def test_generate_neither_subject_422(self, client, sb, admin_auth, admin_headers):
+        exam_type_fixture(sb)
+        res = client.post(
+            "/api/quiz/generate",
+            headers=admin_headers,
+            json={"grade": 3, "exam_type_id": EXAM_TYPE_ID},
+        )
+        assert res.status_code == 422
+        assert "subject_id" in res.json()["detail"]
+
+    def test_generate_unknown_subject_id_422(self, client, sb, admin_auth, admin_headers):
+        exam_type_fixture(sb)
+        res = client.post(
+            "/api/quiz/generate",
+            headers=admin_headers,
+            json={"subject_id": "sub-tidak-ada", "grade": 3, "exam_type_id": EXAM_TYPE_ID},
+        )
+        assert res.status_code == 422
+
+    def test_generate_legacy_subject_name_still_works(self, client, sb, admin_auth, admin_headers, monkeypatch):
+        """Kompatibilitas masa transisi: payload legacy (nama) masih diterima
+        dan baris yang dihasilkan membawa subject_id + subject (nama)."""
+        exam_type_fixture(sb)
+        make_generate_ok(monkeypatch)
+        res = self._generate(client, admin_headers)  # subject: "Matematika"
+        assert res.status_code == 200
+        for q in sb.tables["quizzes"]:
+            assert q["subject_id"] == "sub-1"
+            assert q["subject"] == "Matematika"
 
     def test_exam_type_overrides_grade_config(self, client, sb, admin_auth, admin_headers, monkeypatch):
         exam_type_fixture(sb)
@@ -341,6 +411,30 @@ class TestQuizRequest:
 
     def test_unknown_exam_type_422(self, client, sb):
         res = self._request(client)
+        assert res.status_code == 422
+
+    def test_request_with_subject_id(self, client, sb, monkeypatch):
+        """Payload baru: filter pool lewat subject_id."""
+        exam_type_fixture(sb)
+        make_generate_fail(monkeypatch)
+        insert_quiz(sb, "quiz-1", subject="IPA", subject_id="sub-4")
+
+        res = client.post(
+            "/api/quiz/request",
+            json={"subject_id": "sub-4", "grade": 3, "exam_type_id": EXAM_TYPE_ID},
+        )
+        assert res.status_code == 200
+        body = res.json()
+        assert body["quiz_id"] == "quiz-1"
+        assert body["subject_id"] == "sub-4"
+        assert body["subject"] == "IPA"
+
+    def test_request_neither_subject_422(self, client, sb):
+        exam_type_fixture(sb)
+        res = client.post(
+            "/api/quiz/request",
+            json={"grade": 3, "exam_type_id": EXAM_TYPE_ID},
+        )
         assert res.status_code == 422
 
 
@@ -801,10 +895,10 @@ class TestAvailable:
         ]
         sb.tables.setdefault("quizzes", []).extend(
             [
-                {"subject": "IPA", "grade": 5, "exam_type_id": "et-1", "started": False},
-                {"subject": "IPA", "grade": 5, "exam_type_id": "et-1", "started": True},
-                {"subject": "IPA", "grade": 5, "exam_type_id": "et-2", "started": False},
-                {"subject": "Matematika", "grade": 3, "exam_type_id": "et-1", "started": True},
+                {"subject": "IPA", "subject_id": "sub-4", "grade": 5, "exam_type_id": "et-1", "started": False},
+                {"subject": "IPA", "subject_id": "sub-4", "grade": 5, "exam_type_id": "et-1", "started": True},
+                {"subject": "IPA", "subject_id": "sub-4", "grade": 5, "exam_type_id": "et-2", "started": False},
+                {"subject": "Matematika", "subject_id": "sub-1", "grade": 3, "exam_type_id": "et-1", "started": True},
             ]
         )
         res = client.get("/api/quiz/available")
@@ -1058,6 +1152,7 @@ class TestQuizManagement:
         insert_quiz(sb, "quiz-2", exam_type_id="et-2")
         sb.tables["quizzes"][1]["created_at"] = "2026-01-02T00:00:00+00:00"
         sb.tables["quizzes"][1]["subject"] = "IPA"
+        sb.tables["quizzes"][1]["subject_id"] = "sub-4"
         sb.tables["quizzes"][1]["grade"] = 5
 
         res = client.get("/api/quiz/admin/list", headers=admin_headers)
@@ -1073,6 +1168,34 @@ class TestQuizManagement:
             "/api/quiz/admin/list?exam_type_id=et-2", headers=admin_headers
         )
         assert [r["id"] for r in res.json()] == ["quiz-2"]
+
+    def test_list_filter_by_subject_id(self, client, sb, admin_auth, admin_headers):
+        exam_type_fixture(sb)
+        insert_quiz(sb, "quiz-1")  # Matematika sub-1
+        sb.tables["quizzes"][0]["created_at"] = "2026-01-01T00:00:00+00:00"
+        insert_quiz(sb, "quiz-2", subject="IPA", subject_id="sub-4")
+        sb.tables["quizzes"][1]["created_at"] = "2026-01-02T00:00:00+00:00"
+
+        res = client.get(
+            "/api/quiz/admin/list?subject_id=sub-4", headers=admin_headers
+        )
+        assert [r["id"] for r in res.json()] == ["quiz-2"]
+
+    def test_list_response_carries_subject_id_and_name(self, client, sb, admin_auth, admin_headers):
+        exam_type_fixture(sb)
+        insert_quiz(sb, "quiz-1")
+        res = client.get("/api/quiz/admin/list", headers=admin_headers)
+        row = res.json()[0]
+        assert row["subject"] == "Matematika"
+        assert row["subject_id"] == "sub-1"
+
+    def test_detail_response_carries_subject_id_and_name(self, client, sb, admin_auth, admin_headers):
+        exam_type_fixture(sb)
+        insert_quiz(sb, "quiz-123")
+        res = client.get("/api/quiz/admin/quizzes/quiz-123", headers=admin_headers)
+        body = res.json()
+        assert body["subject"] == "Matematika"
+        assert body["subject_id"] == "sub-1"
 
     def test_detail_includes_answers(self, client, sb, admin_auth, admin_headers):
         exam_type_fixture(sb)
@@ -1433,3 +1556,61 @@ class TestPoolReset:
             headers=admin_headers,
         )
         assert res.status_code == 422
+
+
+class TestBulkDelete:
+    """POST /api/quiz/admin/quizzes/bulk-delete — hapus banyak paket sekaligus."""
+
+    def _bulk(self, client, admin_headers, ids):
+        return client.post(
+            "/api/quiz/admin/quizzes/bulk-delete",
+            json={"ids": ids},
+            headers=admin_headers,
+        )
+
+    def test_bulk_delete_mixed_started_and_unstarted(self, client, sb, admin_auth, admin_headers):
+        """Paket yang sudah pernah dibuka siswa ikut terhapus; riwayat
+        (attempts) terhapus lewat cascade."""
+        exam_type_fixture(sb)
+        insert_quiz(sb, "quiz-a")
+        insert_quiz(sb, "quiz-b", started=True)
+        insert_quiz(sb, "quiz-keep")
+        opened = client.get("/api/quiz/quiz-b")
+        assert opened.status_code == 200
+        assert sb.tables["attempts"]  # attempt quiz-b ada
+
+        res = self._bulk(client, admin_headers, ["quiz-a", "quiz-b"])
+        assert res.status_code == 200
+        assert res.json() == {"deleted": 2}
+        ids = {q["id"] for q in sb.tables["quizzes"]}
+        assert ids == {"quiz-keep"}
+        # Riwayat quiz-b ikut terhapus (cascade), quiz tidak disinggung tetap aman
+        assert sb.tables["attempts"] == []
+
+    def test_bulk_delete_count_and_dedupe(self, client, sb, admin_auth, admin_headers):
+        exam_type_fixture(sb)
+        insert_quiz(sb, "quiz-a")
+        insert_quiz(sb, "quiz-b")
+        res = self._bulk(client, admin_headers, ["quiz-a", "quiz-a", "quiz-b"])
+        assert res.status_code == 200
+        assert res.json()["deleted"] == 2
+        assert sb.tables["quizzes"] == []
+
+    def test_bulk_delete_unknown_ids_ignored(self, client, sb, admin_auth, admin_headers):
+        exam_type_fixture(sb)
+        insert_quiz(sb, "quiz-a")
+        res = self._bulk(client, admin_headers, ["quiz-a", "tidak-ada"])
+        assert res.status_code == 200
+        assert res.json()["deleted"] == 1
+
+    def test_bulk_delete_empty_422(self, client, sb, admin_auth, admin_headers):
+        res = self._bulk(client, admin_headers, [])
+        assert res.status_code == 422
+
+    def test_bulk_delete_more_than_200_422(self, client, sb, admin_auth, admin_headers):
+        res = self._bulk(client, admin_headers, [f"q{i}" for i in range(201)])
+        assert res.status_code == 422
+
+    def test_bulk_delete_requires_admin(self, client, sb):
+        res = client.post("/api/quiz/admin/quizzes/bulk-delete", json={"ids": ["q-1"]})
+        assert res.status_code == 401

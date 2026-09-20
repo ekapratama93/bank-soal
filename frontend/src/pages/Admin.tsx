@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
   ApiError,
+  bulkDeleteQuizPackages,
   createExamType,
   createMaterial,
   createSubject,
@@ -15,7 +16,9 @@ import {
   getSubjects,
   loginAdmin,
   generateBatch,
+  renameSubject,
   resetPool,
+  updateExamType,
   updateMaterial,
   updateQuizPackage,
   uploadMaterial,
@@ -80,6 +83,9 @@ import QuizPackageDetail from "@/components/QuizPackageDetail";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 
 const OPTION_LETTERS = ["A", "B", "C", "D"];
+
+// Batas backend per permintaan bulk-delete (quiz.py Field(max_length=200)).
+const MAX_BULK_DELETE_IDS = 200;
 
 interface EditableQuestion {
   tipe: QuestionType;
@@ -189,6 +195,17 @@ export default function Admin() {
   const [etError, setEtError] = useState<string | null>(null);
   const [etSuccess, setEtSuccess] = useState<string | null>(null);
 
+  interface ExamTypeEditDraft {
+    name: string;
+    jumlah_soal: string;
+    durasi_menit: string;
+    tipe_soal: Record<string, string>;
+    poin_per_tipe: Record<string, string>;
+  }
+  const [editingEtId, setEditingEtId] = useState<string | null>(null);
+  const [etEdit, setEtEdit] = useState<ExamTypeEditDraft | null>(null);
+  const [savingEt, setSavingEt] = useState(false);
+
   const [resetSubject, setResetSubject] = useState<string>("");
   const [resetGrade, setResetGrade] = useState<number>(1);
   const [resetExamTypeId, setResetExamTypeId] = useState<string>("");
@@ -200,6 +217,8 @@ export default function Admin() {
   const [subName, setSubName] = useState("");
   const [subError, setSubError] = useState<string | null>(null);
   const [subSuccess, setSubSuccess] = useState<string | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameName, setRenameName] = useState("");
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
@@ -213,6 +232,8 @@ export default function Admin() {
   const [qmLoading, setQmLoading] = useState(false);
   const [qmError, setQmError] = useState<string | null>(null);
   const [qmMessage, setQmMessage] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [detailData, setDetailData] = useState<QuizPackageDetailData | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -224,7 +245,7 @@ export default function Admin() {
 
   function quizFilters() {
     return {
-      subject: qmSubject !== "all" ? qmSubject : undefined,
+      subject_id: qmSubject !== "all" ? qmSubject : undefined,
       grade: qmGrade !== "all" ? Number(qmGrade) : undefined,
       exam_type_id: qmExamTypeId !== "all" ? qmExamTypeId : undefined,
     };
@@ -235,6 +256,9 @@ export default function Admin() {
     getQuizPackages(tok, quizFilters())
       .then((rows) => {
         setQuizzes(rows);
+        // Pilihan hapus-massa membatasi daftar yang tampil — muat ulang apa pun
+        // (filter, tombol muat ulang) mengosongkannya agar tak menghapus buta.
+        setSelectedIds(new Set());
         setQmError(null);
       })
       .catch((e) => {
@@ -298,6 +322,54 @@ export default function Admin() {
       setQmMessage("Paket soal dihapus.");
     } catch (e) {
       setQmError(e instanceof ApiError ? e.message : "Gagal menghapus paket soal.");
+    }
+  }
+
+  function toggleQuizSelected(id: string, checked: boolean) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+
+  async function handleBulkDeleteQuizzes() {
+    if (!token || selectedIds.size === 0) return;
+    const ids = [...selectedIds];
+    const startedCount = quizzes.filter((q) => selectedIds.has(q.id) && q.started).length;
+    const confirmed = window.confirm(
+      startedCount > 0
+        ? `${ids.length} paket soal akan dihapus (${startedCount} sudah pernah dibuka siswa). Menghapusnya juga menghapus riwayat pengerjaan terkait. Hapus semua paket terpilih?`
+        : `Hapus ${ids.length} paket soal terpilih? Riwayat pengerjaan paket-paket ini juga ikut terhapus.`
+    );
+    if (!confirmed) return;
+    setBulkDeleting(true);
+    setQmError(null);
+    setQmMessage(null);
+    try {
+      // Backend membatasi 200 id per permintaan — kirim bertahap agar
+      // "Pilih semua" pada daftar panjang tetap berhasil.
+      let deleted = 0;
+      for (let i = 0; i < ids.length; i += MAX_BULK_DELETE_IDS) {
+        const res = await bulkDeleteQuizPackages(
+          token,
+          ids.slice(i, i + MAX_BULK_DELETE_IDS)
+        );
+        deleted += res.deleted;
+      }
+      if (detailId && selectedIds.has(detailId)) {
+        setDetailId(null);
+        setDetailData(null);
+      }
+      setSelectedIds(new Set());
+      loadQuizzes(token);
+      setQmMessage(`${deleted} paket soal dihapus.`);
+    } catch (e) {
+      setQmError(e instanceof ApiError ? e.message : "Gagal menghapus paket soal.");
+      loadQuizzes(token);
+    } finally {
+      setBulkDeleting(false);
     }
   }
 
@@ -407,8 +479,8 @@ export default function Admin() {
       .then((subs) => {
         setSubjects(subs);
         if (subs.length > 0) {
-          setSubject((cur) => cur || subs[0].name);
-          setResetSubject((cur) => cur || subs[0].name);
+          setSubject((cur) => cur || subs[0].id);
+          setResetSubject((cur) => cur || subs[0].id);
         }
       })
       .catch(() => setListError("Gagal memuat mata pelajaran."));
@@ -462,7 +534,7 @@ export default function Admin() {
       if (file) {
         const form = new FormData();
         form.append("file", file);
-        form.append("subject", subject);
+        form.append("subject_id", subject);
         form.append("grade", String(grade));
         form.append("exam_type_id", examTypeId);
         if (title.trim()) form.append("title", title.trim());
@@ -471,7 +543,7 @@ export default function Admin() {
         await uploadMaterial(token, form);
       } else {
         await createMaterial(token, {
-          subject,
+          subject_id: subject,
           grade,
           exam_type_id: examTypeId,
           title,
@@ -537,6 +609,22 @@ export default function Admin() {
     }
   }
 
+  async function handleRenameSubject(ev: FormEvent, id: string) {
+    ev.preventDefault();
+    if (!token) return;
+    setSubError(null);
+    setSubSuccess(null);
+    try {
+      await renameSubject(token, id, renameName);
+      setSubjects(await getSubjects());
+      setRenamingId(null);
+      setRenameName("");
+      setSubSuccess("Mata pelajaran diperbarui.");
+    } catch (e) {
+      setSubError(e instanceof ApiError ? e.message : "Gagal mengganti nama mata pelajaran.");
+    }
+  }
+
   async function handleDeleteSubject(id: string) {
     if (!token) return;
     setSubError(null);
@@ -544,7 +632,12 @@ export default function Admin() {
       await deleteSubject(token, id);
       const subs = await getSubjects();
       setSubjects(subs);
-      setSubject((cur) => (subs.some((s) => s.name === cur) ? cur : subs[0]?.name ?? ""));
+      // Seleksi disimpan sebagai id — rapikan semua state yang memegang id
+      // mapel agar tidak menggantung (generate/reset akan 422, filter kuis
+      // akan diam-diam kosong).
+      setSubject((cur) => (subs.some((s) => s.id === cur) ? cur : subs[0]?.id ?? ""));
+      setResetSubject((cur) => (subs.some((s) => s.id === cur) ? cur : subs[0]?.id ?? ""));
+      setQmSubject((cur) => (subs.some((s) => s.id === cur) ? cur : "all"));
     } catch (e) {
       setSubError(e instanceof ApiError ? e.message : "Gagal menghapus mata pelajaran.");
     }
@@ -597,9 +690,88 @@ export default function Admin() {
     setEtError(null);
     try {
       await deleteExamType(token, id);
-      setExamTypes(await getExamTypes());
+      const types = await getExamTypes();
+      setExamTypes(types);
+      if (!types.some((t) => t.id === examTypeId)) setExamTypeId(types[0]?.id ?? "");
+      if (!types.some((t) => t.id === resetExamTypeId)) setResetExamTypeId(types[0]?.id ?? "");
+      if (!types.some((t) => t.id === qmExamTypeId)) setQmExamTypeId("all");
     } catch (e) {
       setEtError(e instanceof ApiError ? e.message : "Gagal menghapus tipe ujian.");
+    }
+  }
+
+  function startEditExamType(t: ExamType) {
+    setEditingEtId(t.id);
+    setEtEdit({
+      name: t.name,
+      jumlah_soal: t.jumlah_soal === null ? "" : String(t.jumlah_soal),
+      durasi_menit: t.durasi_menit === null ? "" : String(t.durasi_menit),
+      tipe_soal: {
+        pilihan_ganda: t.tipe_soal?.pilihan_ganda != null ? String(t.tipe_soal.pilihan_ganda) : "",
+        benar_salah: t.tipe_soal?.benar_salah != null ? String(t.tipe_soal.benar_salah) : "",
+        isian: t.tipe_soal?.isian != null ? String(t.tipe_soal.isian) : "",
+        deskripsi: t.tipe_soal?.deskripsi != null ? String(t.tipe_soal.deskripsi) : "",
+      },
+      poin_per_tipe: {
+        pilihan_ganda: t.poin_per_tipe?.pilihan_ganda != null ? String(t.poin_per_tipe.pilihan_ganda) : "",
+        benar_salah: t.poin_per_tipe?.benar_salah != null ? String(t.poin_per_tipe.benar_salah) : "",
+        isian: t.poin_per_tipe?.isian != null ? String(t.poin_per_tipe.isian) : "",
+        deskripsi: t.poin_per_tipe?.deskripsi != null ? String(t.poin_per_tipe.deskripsi) : "",
+      },
+    });
+    setEtError(null);
+    setEtSuccess(null);
+  }
+
+  function patchEtEdit(patch: Partial<ExamTypeEditDraft>) {
+    setEtEdit((prev) => (prev ? { ...prev, ...patch } : prev));
+  }
+
+  async function handleSaveExamTypeEdit(ev: FormEvent) {
+    ev.preventDefault();
+    if (!token || !editingEtId || !etEdit) return;
+    setEtError(null);
+    setEtSuccess(null);
+    const name = etEdit.name.trim();
+    if (!name) {
+      setEtError("Nama tipe ujian kosong");
+      return;
+    }
+    const adaTipe = QUESTION_TYPE_OPTIONS.some((o) => etEdit.tipe_soal[o.key] !== "");
+    const tipeSoal: TipeSoalConfig | null = adaTipe
+      ? Object.fromEntries(
+          QUESTION_TYPE_OPTIONS.map((o) => [o.key, Number(etEdit.tipe_soal[o.key] || 0)])
+        )
+      : null;
+    const poinEntries = QUESTION_TYPE_OPTIONS.filter(
+      (o) => etEdit.poin_per_tipe[o.key] !== ""
+    ).map((o) => [o.key, Number(etEdit.poin_per_tipe[o.key])]);
+    const poinPerTipe: TipeSoalConfig | null = poinEntries.length
+      ? Object.fromEntries(poinEntries)
+      : null;
+    // Input opsional yang dikosongkan dikirim null secara eksplisit — backend
+    // mengosongkan kolomnya (ikut konfigurasi kelas).
+    setSavingEt(true);
+    try {
+      await updateExamType(token, editingEtId, {
+        name,
+        jumlah_soal: etEdit.jumlah_soal.trim() === "" ? null : Number(etEdit.jumlah_soal),
+        durasi_menit: etEdit.durasi_menit.trim() === "" ? null : Number(etEdit.durasi_menit),
+        tipe_soal: tipeSoal,
+        poin_per_tipe: poinPerTipe,
+      });
+      const types = await getExamTypes();
+      setExamTypes(types);
+      // Seleksi tetap; perbaiki default hanya jika tipe yang dipilih sudah hilang.
+      if (!types.some((t) => t.id === examTypeId)) setExamTypeId(types[0]?.id ?? "");
+      if (!types.some((t) => t.id === resetExamTypeId)) setResetExamTypeId(types[0]?.id ?? "");
+      setEditingEtId(null);
+      setEtEdit(null);
+      setEtSuccess("Tipe ujian diperbarui.");
+    } catch (e) {
+      setEtError(e instanceof ApiError ? e.message : "Gagal memperbarui tipe ujian.");
+    } finally {
+      setSavingEt(false);
     }
   }
 
@@ -610,7 +782,7 @@ export default function Admin() {
     setGenerating(true);
     try {
       const res = await generateBatch(token, {
-        subject: resetSubject,
+        subject_id: resetSubject,
         grade: resetGrade,
         exam_type_id: resetExamTypeId,
         jumlah_paket: genJumlahPaket,
@@ -631,7 +803,7 @@ export default function Admin() {
     setResetMessage(null);
     try {
       const res = await resetPool(token, {
-        subject: resetSubject,
+        subject_id: resetSubject,
         grade: resetGrade,
         exam_type_id: resetExamTypeId,
       });
@@ -805,20 +977,68 @@ export default function Admin() {
                       key={s.id}
                       className="border-border/60 flex items-center justify-between gap-3 rounded-xl border px-4 py-3"
                     >
-                      <div className="flex items-center gap-3">
+                      <div className="flex min-w-0 items-center gap-3">
                         <span className="bg-secondary text-primary flex size-9 shrink-0 items-center justify-center rounded-full">
                           <BookOpen className="size-4" />
                         </span>
-                        <strong className="font-bold">{s.name}</strong>
+                        {renamingId === s.id ? (
+                          <form
+                            id={`rename-${s.id}`}
+                            onSubmit={(e) => void handleRenameSubject(e, s.id)}
+                            className="flex flex-1 items-center gap-2"
+                          >
+                            <Input
+                              autoFocus
+                              type="text"
+                              value={renameName}
+                              onChange={(e) => setRenameName(e.target.value)}
+                              placeholder="Nama baru mata pelajaran"
+                              required
+                            />
+                            <Button type="submit" size="sm" disabled={renameName.trim() === ""}>
+                              Simpan
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                setRenamingId(null);
+                                setRenameName("");
+                              }}
+                            >
+                              Batal
+                            </Button>
+                          </form>
+                        ) : (
+                          <strong className="font-bold">{s.name}</strong>
+                        )}
                       </div>
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        onClick={() => void handleDeleteSubject(s.id)}
-                      >
-                        <Trash2 />
-                        Hapus
-                      </Button>
+                      {renamingId !== s.id && (
+                        <div className="flex shrink-0 gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setRenamingId(s.id);
+                              setRenameName(s.name);
+                              setSubError(null);
+                              setSubSuccess(null);
+                            }}
+                          >
+                            <Pencil />
+                            Edit
+                          </Button>
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => void handleDeleteSubject(s.id)}
+                          >
+                            <Trash2 />
+                            Hapus
+                          </Button>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -962,60 +1182,193 @@ export default function Admin() {
                 <EmptyState icon={ListChecks} text="Belum ada tipe ujian." />
               ) : (
                 <div className="flex flex-col gap-2">
-                  {examTypes.map((t) => (
-                    <div
-                      key={t.id}
-                      className="border-border/60 flex items-center justify-between gap-3 rounded-xl border px-4 py-3"
-                    >
-                      <div className="flex items-center gap-3">
-                        <span className="bg-secondary text-primary flex size-9 shrink-0 items-center justify-center rounded-full">
-                          <ListChecks className="size-4" />
-                        </span>
-                        <div>
-                          <strong className="font-bold">{t.name}</strong>
-                          <div className="mt-1.5 flex flex-wrap gap-1.5">
-                            {t.tipe_soal && Object.keys(t.tipe_soal).length > 0 ? (
-                              QUESTION_TYPE_OPTIONS.filter(
-                                (o) => (t.tipe_soal?.[o.key] ?? 0) > 0
-                              ).map((o) => (
-                                <Badge key={o.key} variant="secondary">
-                                  <Hash />
-                                  {t.tipe_soal![o.key]} {o.short}
-                                </Badge>
-                              ))
-                            ) : (
-                              <Badge variant="secondary">
-                                <Hash />
-                                {t.jumlah_soal ? `${t.jumlah_soal} soal` : "ikut kelas"}
-                              </Badge>
-                            )}
-                            {t.poin_per_tipe &&
-                              Object.keys(t.poin_per_tipe).length > 0 &&
-                              QUESTION_TYPE_OPTIONS.filter(
-                                (o) => (t.poin_per_tipe?.[o.key] ?? 0) > 0
-                              ).map((o) => (
-                                <Badge key={`poin-${o.key}`} variant="outline">
-                                  <Coins />
-                                  {t.poin_per_tipe![o.key]} poin {o.short}
-                                </Badge>
-                              ))}
-                            <Badge variant="secondary">
-                              <Clock />
-                              {t.durasi_menit ? `${t.durasi_menit} menit` : "ikut kelas"}
-                            </Badge>
+                  {examTypes.map((t) =>
+                    editingEtId === t.id && etEdit ? (
+                      <form
+                        key={t.id}
+                        onSubmit={handleSaveExamTypeEdit}
+                        className="border-border/60 flex flex-col gap-3 rounded-xl border px-4 py-3.5"
+                      >
+                        <div className="flex flex-col gap-2">
+                          <Label htmlFor={`ete-name-${t.id}`}>Nama Tipe Ujian</Label>
+                          <Input
+                            id={`ete-name-${t.id}`}
+                            type="text"
+                            value={etEdit.name}
+                            onChange={(e) => patchEtEdit({ name: e.target.value })}
+                            required
+                          />
+                        </div>
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                          <div className="flex flex-col gap-2">
+                            <Label htmlFor={`ete-jumlah-${t.id}`}>
+                              Jumlah Soal (kosongkan = ikut kelas)
+                            </Label>
+                            <Input
+                              id={`ete-jumlah-${t.id}`}
+                              type="number"
+                              min={5}
+                              max={50}
+                              value={etEdit.jumlah_soal}
+                              onChange={(e) => patchEtEdit({ jumlah_soal: e.target.value })}
+                            />
+                          </div>
+                          <div className="flex flex-col gap-2">
+                            <Label htmlFor={`ete-durasi-${t.id}`}>
+                              Durasi Menit (kosongkan = ikut kelas)
+                            </Label>
+                            <Input
+                              id={`ete-durasi-${t.id}`}
+                              type="number"
+                              min={10}
+                              max={180}
+                              value={etEdit.durasi_menit}
+                              onChange={(e) => patchEtEdit({ durasi_menit: e.target.value })}
+                            />
                           </div>
                         </div>
-                      </div>
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        onClick={() => void handleDeleteExamType(t.id)}
+                        <div className="border-border/60 flex flex-col gap-3 rounded-xl border border-dashed p-4">
+                          <div className="flex flex-col gap-1">
+                            <Label>Komposisi Tipe Soal (kosongkan semua = otomatis)</Label>
+                            <p className="text-muted-foreground text-xs">
+                              Isi jumlah soal per tipe. Mengosongkan kolom ini saat menyimpan
+                              menghapus komposisi (kembali ke komposisi otomatis).
+                            </p>
+                          </div>
+                          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                            {QUESTION_TYPE_OPTIONS.map((o) => (
+                              <div key={o.key} className="flex flex-col gap-1.5">
+                                <Label htmlFor={`ete-tp-${t.id}-${o.key}`} className="text-xs">
+                                  {o.label}
+                                </Label>
+                                <Input
+                                  id={`ete-tp-${t.id}-${o.key}`}
+                                  type="number"
+                                  min={0}
+                                  max={50}
+                                  value={etEdit.tipe_soal[o.key] ?? ""}
+                                  onChange={(e) =>
+                                    patchEtEdit({
+                                      tipe_soal: { ...etEdit.tipe_soal, [o.key]: e.target.value },
+                                    })
+                                  }
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="border-border/60 flex flex-col gap-3 rounded-xl border border-dashed p-4">
+                          <div className="flex flex-col gap-1">
+                            <Label>Poin per Tipe Soal (kosongkan semua = 1 poin)</Label>
+                            <p className="text-muted-foreground text-xs">
+                              Mengosongkan kolom saat menyimpan menghapus bobot poin; mengubah
+                              poin berlaku untuk pengumpulan berikutnya (skor dibaca saat submit).
+                            </p>
+                          </div>
+                          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                            {QUESTION_TYPE_OPTIONS.map((o) => (
+                              <div key={o.key} className="flex flex-col gap-1.5">
+                                <Label htmlFor={`ete-poin-${t.id}-${o.key}`} className="text-xs">
+                                  {o.label}
+                                </Label>
+                                <Input
+                                  id={`ete-poin-${t.id}-${o.key}`}
+                                  type="number"
+                                  min={1}
+                                  max={100}
+                                  value={etEdit.poin_per_tipe[o.key] ?? ""}
+                                  onChange={(e) =>
+                                    patchEtEdit({
+                                      poin_per_tipe: {
+                                        ...etEdit.poin_per_tipe,
+                                        [o.key]: e.target.value,
+                                      },
+                                    })
+                                  }
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button type="submit" disabled={savingEt}>
+                            <CheckCircle2 />
+                            {savingEt ? "Menyimpan…" : "Simpan Perubahan"}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => {
+                              setEditingEtId(null);
+                              setEtEdit(null);
+                            }}
+                            disabled={savingEt}
+                          >
+                            Batal
+                          </Button>
+                        </div>
+                      </form>
+                    ) : (
+                      <div
+                        key={t.id}
+                        className="border-border/60 flex items-center justify-between gap-3 rounded-xl border px-4 py-3"
                       >
-                        <Trash2 />
-                        Hapus
-                      </Button>
-                    </div>
-                  ))}
+                        <div className="flex items-center gap-3">
+                          <span className="bg-secondary text-primary flex size-9 shrink-0 items-center justify-center rounded-full">
+                            <ListChecks className="size-4" />
+                          </span>
+                          <div>
+                            <strong className="font-bold">{t.name}</strong>
+                            <div className="mt-1.5 flex flex-wrap gap-1.5">
+                              {t.tipe_soal && Object.keys(t.tipe_soal).length > 0 ? (
+                                QUESTION_TYPE_OPTIONS.filter(
+                                  (o) => (t.tipe_soal?.[o.key] ?? 0) > 0
+                                ).map((o) => (
+                                  <Badge key={o.key} variant="secondary">
+                                    <Hash />
+                                    {t.tipe_soal![o.key]} {o.short}
+                                  </Badge>
+                                ))
+                              ) : (
+                                <Badge variant="secondary">
+                                  <Hash />
+                                  {t.jumlah_soal ? `${t.jumlah_soal} soal` : "ikut kelas"}
+                                </Badge>
+                              )}
+                              {t.poin_per_tipe &&
+                                Object.keys(t.poin_per_tipe).length > 0 &&
+                                QUESTION_TYPE_OPTIONS.filter(
+                                  (o) => (t.poin_per_tipe?.[o.key] ?? 0) > 0
+                                ).map((o) => (
+                                  <Badge key={`poin-${o.key}`} variant="outline">
+                                    <Coins />
+                                    {t.poin_per_tipe![o.key]} poin {o.short}
+                                  </Badge>
+                                ))}
+                              <Badge variant="secondary">
+                                <Clock />
+                                {t.durasi_menit ? `${t.durasi_menit} menit` : "ikut kelas"}
+                              </Badge>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 gap-2">
+                          <Button variant="outline" size="sm" onClick={() => startEditExamType(t)}>
+                            <Pencil />
+                            Edit
+                          </Button>
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => void handleDeleteExamType(t.id)}
+                          >
+                            <Trash2 />
+                            Hapus
+                          </Button>
+                        </div>
+                      </div>
+                    )
+                  )}
                 </div>
               )}
             </CardContent>
@@ -1044,7 +1397,7 @@ export default function Admin() {
                     </SelectTrigger>
                     <SelectContent>
                       {subjects.map((s) => (
-                        <SelectItem key={s.id} value={s.name}>
+                        <SelectItem key={s.id} value={s.id}>
                           {s.name}
                         </SelectItem>
                       ))}
@@ -1256,7 +1609,7 @@ export default function Admin() {
                   </SelectTrigger>
                   <SelectContent>
                     {subjects.map((s) => (
-                      <SelectItem key={s.id} value={s.name}>
+                      <SelectItem key={s.id} value={s.id}>
                         {s.name}
                       </SelectItem>
                     ))}
@@ -1364,7 +1717,7 @@ export default function Admin() {
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                <div className="flex flex-col gap-2">
+<div className="flex flex-col gap-2">
                   <Label htmlFor="qm-subject">Mata Pelajaran</Label>
                   <Select value={qmSubject} onValueChange={setQmSubject}>
                     <SelectTrigger id="qm-subject">
@@ -1373,7 +1726,7 @@ export default function Admin() {
                     <SelectContent>
                       <SelectItem value="all">Semua</SelectItem>
                       {subjects.map((s) => (
-                        <SelectItem key={s.id} value={s.name}>
+                        <SelectItem key={s.id} value={s.id}>
                           {s.name}
                         </SelectItem>
                       ))}
@@ -1426,9 +1779,33 @@ export default function Admin() {
                 </Alert>
               )}
               <div className="flex items-center justify-between gap-2">
-                <p className="text-muted-foreground text-sm">
-                  {quizzes.length} paket soal
-                </p>
+                <div className="flex items-center gap-3">
+                  {quizzes.length > 0 && (
+                    <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold">
+                      <input
+                        type="checkbox"
+                        className="accent-primary size-4"
+                        checked={
+                          !qmLoading &&
+                          quizzes.length > 0 &&
+                          quizzes.every((q) => selectedIds.has(q.id))
+                        }
+                        disabled={qmLoading}
+                        onChange={(e) =>
+                          setSelectedIds(
+                            e.target.checked
+                              ? new Set(quizzes.map((q) => q.id))
+                              : new Set()
+                          )
+                        }
+                      />
+                      Pilih semua
+                    </label>
+                  )}
+                  <p className="text-muted-foreground text-sm">
+                    {quizzes.length} paket soal
+                  </p>
+                </div>
                 <Button
                   variant="outline"
                   size="sm"
@@ -1439,6 +1816,22 @@ export default function Admin() {
                   Muat Ulang
                 </Button>
               </div>
+              {selectedIds.size > 0 && (
+                <div className="border-destructive/40 bg-destructive/5 flex items-center justify-between gap-3 rounded-xl border px-4 py-3">
+                  <p className="text-sm font-semibold">
+                    {selectedIds.size} paket dipilih
+                  </p>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => void handleBulkDeleteQuizzes()}
+                    disabled={bulkDeleting || qmLoading}
+                  >
+                    <Trash2 />
+                    {bulkDeleting ? "Menghapus…" : "Hapus Terpilih"}
+                  </Button>
+                </div>
+              )}
               {quizzes.length === 0 ? (
                 <EmptyState
                   icon={Package}
@@ -1454,6 +1847,13 @@ export default function Admin() {
                     <div key={q.id} className="flex flex-col gap-2">
                       <div className="border-border/60 flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3">
                         <div className="flex min-w-0 items-center gap-3">
+                          <input
+                            type="checkbox"
+                            className="accent-primary size-4 shrink-0"
+                            aria-label={`Pilih paket ${q.subject} kelas ${q.grade}`}
+                            checked={selectedIds.has(q.id)}
+                            onChange={(e) => toggleQuizSelected(q.id, e.target.checked)}
+                          />
                           <span className="bg-secondary text-primary flex size-9 shrink-0 items-center justify-center rounded-full">
                             <Package className="size-4" />
                           </span>

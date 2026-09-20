@@ -18,6 +18,7 @@ class Query:
         self.table = table
         self.op = "select"
         self.filters = []
+        self._in_filters = []
         self._single = False
         self._order = None
 
@@ -26,6 +27,11 @@ class Query:
 
     def eq(self, col, val):
         self.filters.append((col, val))
+        return self
+
+    def in_(self, col, values):
+        # supabase-py: .in_(kolom, daftar nilai) — keanggotaan, bukan kesamaan.
+        self._in_filters.append((col, list(values)))
         return self
 
     def order(self, col, desc=False):
@@ -50,6 +56,11 @@ class Query:
         self.updates = data
         return self
 
+    def _matches(self, row):
+        if not all(row.get(c) == v for c, v in self.filters):
+            return False
+        return all(row.get(c) in vals for c, vals in self._in_filters)
+
     def execute(self):
         rows = self.sb.tables.setdefault(self.table, [])
         if self.op == "insert":
@@ -67,7 +78,7 @@ class Query:
             rows.append(row)
             return FakeResult([row])
         if self.op == "delete":
-            removed = [r for r in rows if all(r.get(c) == v for c, v in self.filters)]
+            removed = [r for r in rows if self._matches(r)]
             self.sb.tables[self.table] = [r for r in rows if r not in removed]
             for child_table, fk_col in self.sb.cascades.get(self.table, []):
                 ids = {r.get("id") for r in removed}
@@ -79,11 +90,11 @@ class Query:
         if self.op == "update":
             updated = []
             for r in rows:
-                if all(r.get(c) == v for c, v in self.filters):
+                if self._matches(r):
                     r.update(self.updates)
                     updated.append(r)
             return FakeResult(updated)
-        data = [r for r in rows if all(r.get(c) == v for c, v in self.filters)]
+        data = [r for r in rows if self._matches(r)]
         if self._order:
             col, desc = self._order
             data = sorted(

@@ -128,6 +128,86 @@ alter table public.attempts alter column score drop not null;
 alter table public.attempts alter column submitted_at drop not null;
 alter table public.attempts alter column submitted_at drop default;
 
+-- ============================================================
+-- subject_id (FASE 1 — aktif): materials/quizzes berpindah dari menyimpan
+-- NAMA mapel (teks) menjadi merujuk subjects.id (FK). Kolom teks `subject`
+-- masih ada sampai FASE 2 supaya backend lama tetap jalan selama deploy.
+-- ============================================================
+alter table public.materials add column if not exists subject_id uuid references public.subjects (id);
+alter table public.quizzes add column if not exists subject_id uuid references public.subjects (id);
+
+-- Backfill idempoten: nama mapel yang belum terdaftar (baris lama/orphan)
+-- didaftarkan dulu sebagai subjects, lalu subject_id diisi dari nama.
+-- Aman dijalankan ulang — baris yang diisi backend lama selama jendela
+-- deploy (teks terisi, subject_id NULL) ikut tertangani saat dijalankan ulang.
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'materials' and column_name = 'subject'
+  ) then
+    insert into public.subjects (name)
+    select distinct m.subject
+    from public.materials m
+    where m.subject is not null and m.subject <> ''
+    on conflict (name) do nothing;
+
+    update public.materials m
+    set subject_id = s.id
+    from public.subjects s
+    where m.subject = s.name and m.subject_id is null;
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'quizzes' and column_name = 'subject'
+  ) then
+    insert into public.subjects (name)
+    select distinct q.subject
+    from public.quizzes q
+    where q.subject is not null and q.subject <> ''
+    on conflict (name) do nothing;
+
+    update public.quizzes q
+    set subject_id = s.id
+    from public.subjects s
+    where q.subject = s.name and q.subject_id is null;
+  end if;
+end $$;
+
+create index if not exists idx_materials_subject_id on public.materials (subject_id);
+create index if not exists idx_quizzes_subject_id on public.quizzes (subject_id);
+
+-- FASE 2 (JANGAN dijalankan sebelum backend fase-2 di-deploy — backend harus
+-- berhenti menulis kolom teks `subject` lebih dulu). Urutan:
+--   1) Segera setelah backend fase-2 aktif, jalankan "Langkah 1" di bawah —
+--      backend fase-2 berhenti menulis kolom teks `subject`, dan kolom itu
+--      masih NOT NULL, jadi tanpa langkah ini SEMUA insert materi/kuis gagal
+--      (23502) sampai kolomnya dihapus.
+--   2) Jalankan ulang schema.sql ini (backfill menutup baris transisi).
+--   3) Hapus komentar blok "Langkah 3" lalu jalankan.
+--
+-- Langkah 1 (boleh NULL dulu — aman dijalankan ulang, hanya menyentuh kolom
+-- yang masih ada):
+do $$ begin
+  if exists (select 1 from information_schema.columns
+             where table_schema = 'public' and table_name = 'materials' and column_name = 'subject') then
+    alter table public.materials alter column subject drop not null;
+  end if;
+  if exists (select 1 from information_schema.columns
+             where table_schema = 'public' and table_name = 'quizzes' and column_name = 'subject') then
+    alter table public.quizzes alter column subject drop not null;
+  end if;
+end $$;
+--
+-- Langkah 3 (setelah langkah 1 dan 2):
+alter table public.materials alter column subject_id set not null;
+alter table public.materials drop column if exists subject;
+alter table public.quizzes alter column subject_id set not null;
+alter table public.quizzes drop column if exists subject;
+drop index if exists idx_materials_combo;
+create index if not exists idx_materials_combo_sid on public.materials (subject_id, grade, exam_type_id);
+
 -- Satu siswa (client_id) hanya boleh punya satu attempt per paket soal —
 -- ini yang mencegah siswa yang sama mengulang paket yang sama.
 create unique index if not exists idx_attempts_quiz_client
@@ -144,9 +224,20 @@ create index if not exists idx_attempts_client
 -- FK lookup & ON DELETE CASCADE
 create index if not exists idx_attempts_quiz on public.attempts (quiz_id);
 
--- Ambil semua materi untuk kombinasi (juga melayani filter subject saja)
-create index if not exists idx_materials_combo
-  on public.materials (subject, grade, exam_type_id);
+-- idx_materials_combo dibangun di atas kolom teks subject — setelah FASE 2
+-- menghapus kolom itu, Postgres ikut menjatuhkan indeks ini. Guard ini menjaga
+-- berkas tetap aman dijalankan ulang setelah FASE 2 (penggantinya di fase 2:
+-- idx_materials_combo_sid di atas subject_id).
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'materials' and column_name = 'subject'
+  ) then
+    create index if not exists idx_materials_combo
+      on public.materials (subject, grade, exam_type_id);
+  end if;
+end $$;
 create index if not exists idx_materials_exam_type on public.materials (exam_type_id);
 
 -- Klien backend memakai service_role; pastikan punya akses penuh ke semua tabel.

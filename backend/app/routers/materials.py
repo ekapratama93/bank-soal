@@ -30,12 +30,6 @@ def require_admin(authorization: str | None = Header(default=None)) -> dict:
     return {"id": user.id, "email": user.email}
 
 
-def _validate_subject(sb, subject: str):
-    res = sb.table("subjects").select("id").eq("name", subject).execute()
-    if not res.data:
-        raise HTTPException(status_code=422, detail="Mata pelajaran tidak valid")
-
-
 def _validate_exam_type(sb, exam_type_id: str):
     res = sb.table("exam_types").select("id").eq("id", exam_type_id).execute()
     if not res.data:
@@ -43,8 +37,78 @@ def _validate_exam_type(sb, exam_type_id: str):
     return exam_type_id
 
 
+def resolve_subject(sb, *, subject_id=None, subject=None) -> dict:
+    """Terima subject_id (baru) ATAU subject (nama, kompatibel kode lama) —
+    kembalikan baris subjects. Bila keduanya diisi, subject_id yang menang.
+    422 bila keduanya kosong, atau tidak ditemukan."""
+    if subject_id:
+        res = sb.table("subjects").select("*").eq("id", subject_id).execute()
+        if res.data:
+            return res.data[0]
+        raise HTTPException(status_code=422, detail="Mata pelajaran tidak valid")
+    if subject:
+        res = sb.table("subjects").select("*").eq("name", subject).execute()
+        if res.data:
+            return res.data[0]
+        raise HTTPException(status_code=422, detail="Mata pelajaran tidak valid")
+    raise HTTPException(
+        status_code=422, detail="subject atau subject_id wajib diisi"
+    )
+
+
+def subject_columns(sub: dict) -> dict:
+    """Kolom subject yang ditulis saat insert/update materi & kuis selama masa
+    transisi: FK subject_id + teks subject (nama, dibaca kode lama).
+    Fase 2: hapus key "subject" di sini, deploy, lalu jalankan SQL fase 2."""
+    return {"subject_id": sub["id"], "subject": sub["name"]}
+
+
+def subject_names_map(sb) -> dict[str, str]:
+    """Peta {id: nama} subjects untuk mendekorasi respons — pengganti embed
+    PostgREST supaya ramah dengan fake Supabase di test."""
+    res = sb.table("subjects").select("id, name").execute()
+    return {s["id"]: s["name"] for s in (res.data or [])}
+
+
+def subject_display_name(
+    subject_id: str | None, row_subject: str | None, names: dict[str, str]
+) -> str:
+    """Nama tampilan mapel — peta subjects adalah sumber kebenaran (rename
+    langsung tampil); teks pada baris hanya fallback untuk baris lawas tanpa
+    subject_id (baris yang ditulis backend lama selama jendela deploy)."""
+    return names.get(subject_id, "") or (row_subject or "")
+
+
+def decorate_subject(sb, row: dict, names: dict[str, str] | None = None) -> dict:
+    """Pastikan respons selalu membawa subject (nama tampil) + subject_id.
+    Nama diambil dari peta subjects supaya rename langsung tampil; teks baris
+    dipakai hanya bila baris belum punya subject_id."""
+    out = dict(row)
+    if names is None:
+        names = subject_names_map(sb)
+    out["subject"] = subject_display_name(
+        out.get("subject_id"), out.get("subject"), names
+    )
+    return out
+
+
+def _row_subject_id(sb, row: dict) -> str | None:
+    """subject_id dari baris materi/kuis — baris yang ditulis backend lama
+    selama jendela deploy hanya membawa teks subject, jadi diresolvakan."""
+    if row.get("subject_id"):
+        return row["subject_id"]
+    name = row.get("subject")
+    if not name:
+        return None
+    try:
+        return resolve_subject(sb, subject=name)["id"]
+    except HTTPException:
+        return None
+
+
 class MaterialIn(BaseModel):
-    subject: str
+    subject_id: str | None = None
+    subject: str | None = None
     grade: int = Field(ge=1, le=12)
     exam_type_id: str
     title: str
@@ -52,6 +116,7 @@ class MaterialIn(BaseModel):
 
 
 class MaterialUpdate(BaseModel):
+    subject_id: str | None = None
     subject: str | None = None
     grade: int | None = Field(default=None, ge=1, le=12)
     exam_type_id: str | None = None
@@ -59,13 +124,13 @@ class MaterialUpdate(BaseModel):
     content: str | None = None
 
 
-def _invalidate_pool(sb, subject: str, grade: int, exam_type_id: str) -> int:
+def _invalidate_pool(sb, subject_id: str, grade: int, exam_type_id: str) -> int:
     """Hapus paket yang belum dimulai agar batch berikutnya dibuat ulang
     dari materi terbaru (materi lama tetap dipakai sebagai konteks)."""
     removed = (
         sb.table("quizzes")
         .delete()
-        .eq("subject", subject)
+        .eq("subject_id", subject_id)
         .eq("grade", grade)
         .eq("exam_type_id", exam_type_id)
         .eq("started", False)
@@ -76,30 +141,37 @@ def _invalidate_pool(sb, subject: str, grade: int, exam_type_id: str) -> int:
 
 @router.get("")
 def list_materials(
+    subject_id: str | None = None,
     subject: str | None = None,
     grade: int | None = None,
     admin: dict = Depends(require_admin),
 ):
     sb = get_supabase()
     query = sb.table("materials").select("*, exam_types(name)").order("created_at", desc=True)
-    if subject:
-        query = query.eq("subject", subject)
+    if subject_id:
+        query = query.eq("subject_id", subject_id)
+    elif subject:
+        # Filter legacy (nama) — diresolvakan ke subject_id supaya memakai
+        # indeks dan tetap bekerja setelah kolom teks dihapus di fase 2.
+        sub = resolve_subject(sb, subject=subject)
+        query = query.eq("subject_id", sub["id"])
     if grade is not None:
         query = query.eq("grade", grade)
     res = query.execute()
-    return res.data
+    names = subject_names_map(sb)
+    return [decorate_subject(sb, row, names) for row in res.data]
 
 
 @router.post("", status_code=201)
 def create_material(body: MaterialIn, admin: dict = Depends(require_admin)):
     sb = get_supabase()
-    _validate_subject(sb, body.subject)
+    sub = resolve_subject(sb, subject_id=body.subject_id, subject=body.subject)
     _validate_exam_type(sb, body.exam_type_id)
     res = (
         sb.table("materials")
         .insert(
             {
-                "subject": body.subject,
+                **subject_columns(sub),
                 "grade": body.grade,
                 "exam_type_id": body.exam_type_id,
                 "title": body.title,
@@ -109,14 +181,15 @@ def create_material(body: MaterialIn, admin: dict = Depends(require_admin)):
         )
         .execute()
     )
-    _invalidate_pool(sb, body.subject, body.grade, body.exam_type_id)
-    return res.data[0]
+    _invalidate_pool(sb, sub["id"], body.grade, body.exam_type_id)
+    return decorate_subject(sb, res.data[0])
 
 
 @router.post("/upload", status_code=201)
 async def upload_material(
     file: UploadFile | None = File(default=None),
-    subject: str = Form(...),
+    subject_id: str = Form(default=""),
+    subject: str = Form(default=""),
     grade: int = Form(...),
     exam_type_id: str = Form(...),
     title: str = Form(default=""),
@@ -126,7 +199,7 @@ async def upload_material(
     if not 1 <= grade <= 12:
         raise HTTPException(status_code=422, detail="Kelas tidak valid")
     sb = get_supabase()
-    _validate_subject(sb, subject)
+    sub = resolve_subject(sb, subject_id=subject_id or None, subject=subject or None)
     _validate_exam_type(sb, exam_type_id)
 
     parts = []
@@ -164,7 +237,7 @@ async def upload_material(
         sb.table("materials")
         .insert(
             {
-                "subject": subject,
+                **subject_columns(sub),
                 "grade": grade,
                 "exam_type_id": exam_type_id,
                 "title": final_title,
@@ -175,8 +248,8 @@ async def upload_material(
         )
         .execute()
     )
-    _invalidate_pool(sb, subject, grade, exam_type_id)
-    return res.data[0]
+    _invalidate_pool(sb, sub["id"], grade, exam_type_id)
+    return decorate_subject(sb, res.data[0])
 
 
 @router.patch("/{material_id}")
@@ -190,9 +263,10 @@ def update_material(
     current = existing.data[0]
 
     updates: dict = {}
-    if body.subject is not None and body.subject != current["subject"]:
-        _validate_subject(sb, body.subject)
-        updates["subject"] = body.subject
+    if body.subject_id is not None or body.subject is not None:
+        sub = resolve_subject(sb, subject_id=body.subject_id, subject=body.subject)
+        if sub["id"] != current.get("subject_id"):
+            updates.update(subject_columns(sub))
     if body.grade is not None and body.grade != current["grade"]:
         updates["grade"] = body.grade
     if body.exam_type_id is not None and body.exam_type_id != current["exam_type_id"]:
@@ -209,18 +283,26 @@ def update_material(
 
     if updates:
         sb.table("materials").update(updates).eq("id", material_id).execute()
-        _invalidate_pool(
-            sb,
-            updates.get("subject", current["subject"]),
-            updates.get("grade", current["grade"]),
-            updates.get("exam_type_id", current["exam_type_id"]),
+        current_subject_id = _row_subject_id(sb, current)
+        new_subject_id = (
+            updates["subject_id"]
+            if "subject_id" in updates
+            else current_subject_id
         )
-        if updates.get("subject") or updates.get("grade") or updates.get("exam_type_id"):
+        if new_subject_id:
+            _invalidate_pool(sb, new_subject_id, updates.get("grade", current["grade"]), updates.get("exam_type_id", current["exam_type_id"]))
+        if updates.get("subject_id") or updates.get("grade") or updates.get("exam_type_id"):
             # Jika pindah kombinasi, bersihkan juga pool kombinasi lama
-            _invalidate_pool(sb, current["subject"], current["grade"], current["exam_type_id"])
+            if current_subject_id:
+                _invalidate_pool(sb, current_subject_id, current["grade"], current["exam_type_id"])
 
-    res = sb.table("materials").select("*").eq("id", material_id).execute()
-    return res.data[0] if res.data else None
+    res = (
+        sb.table("materials")
+        .select("*, exam_types(name)")
+        .eq("id", material_id)
+        .execute()
+    )
+    return decorate_subject(sb, res.data[0]) if res.data else None
 
 
 @router.delete("/{material_id}", status_code=204)
@@ -231,5 +313,7 @@ def delete_material(material_id: str, admin: dict = Depends(require_admin)):
         raise HTTPException(status_code=404, detail="Materi tidak ditemukan")
     current = existing.data[0]
     sb.table("materials").delete().eq("id", material_id).execute()
-    _invalidate_pool(sb, current["subject"], current["grade"], current["exam_type_id"])
+    subject_id = _row_subject_id(sb, current)
+    if subject_id:
+        _invalidate_pool(sb, subject_id, current["grade"], current["exam_type_id"])
     return None

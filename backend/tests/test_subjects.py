@@ -48,19 +48,110 @@ class TestSubjects:
         sub = next(
             s for s in client.get("/api/subjects").json() if s["name"] == "IPA"
         )
-        admin_auth.tables["materials"] = [{"id": "m-1", "subject": "IPA"}]
+        admin_auth.tables["materials"] = [
+            {"id": "m-1", "subject": "IPA", "subject_id": sub["id"]}
+        ]
         res = client.delete(f"/api/subjects/{sub['id']}", headers=admin_headers)
         assert res.status_code == 409
         assert "materi" in res.json()["detail"]
+
+    def test_delete_blocked_by_material_legacy_text_row(self, client, admin_auth, admin_headers):
+        """Baris yang ditulis backend lama selama jendela deploy hanya membawa
+        teks subject (subject_id belum ter-backfill) — tetap harus memblokir."""
+        sub = next(
+            s for s in client.get("/api/subjects").json() if s["name"] == "IPA"
+        )
+        admin_auth.tables["materials"] = [{"id": "m-1", "subject": "IPA"}]
+        res = client.delete(f"/api/subjects/{sub['id']}", headers=admin_headers)
+        assert res.status_code == 409
 
     def test_delete_blocked_by_quiz(self, client, admin_auth, admin_headers):
         sub = next(
             s for s in client.get("/api/subjects").json() if s["name"] == "IPA"
         )
-        admin_auth.tables["quizzes"] = [{"id": "q-1", "subject": "IPA"}]
+        admin_auth.tables["quizzes"] = [
+            {"id": "q-1", "subject": "IPA", "subject_id": sub["id"]}
+        ]
         res = client.delete(f"/api/subjects/{sub['id']}", headers=admin_headers)
         assert res.status_code == 409
         assert "kuis" in res.json()["detail"]
+
+    def test_rename(self, client, admin_auth, admin_headers):
+        sub = next(
+            s for s in client.get("/api/subjects").json() if s["name"] == "IPA"
+        )
+        res = client.patch(
+            f"/api/subjects/{sub['id']}",
+            headers=admin_headers,
+            json={"name": "Ilmu Pengetahuan Alam"},
+        )
+        assert res.status_code == 200
+        body = res.json()
+        assert body["id"] == sub["id"]
+        assert body["name"] == "Ilmu Pengetahuan Alam"
+        names = [s["name"] for s in client.get("/api/subjects").json()]
+        assert "Ilmu Pengetahuan Alam" in names
+        assert "IPA" not in names
+
+    def test_rename_not_found(self, client, admin_auth, admin_headers):
+        res = client.patch(
+            "/api/subjects/tidak-ada", headers=admin_headers, json={"name": "X"}
+        )
+        assert res.status_code == 404
+
+    def test_rename_empty_422(self, client, admin_auth, admin_headers):
+        sub = next(
+            s for s in client.get("/api/subjects").json() if s["name"] == "IPA"
+        )
+        res = client.patch(
+            f"/api/subjects/{sub['id']}", headers=admin_headers, json={"name": "   "}
+        )
+        assert res.status_code == 422
+
+    def test_rename_duplicate_409(self, client, admin_auth, admin_headers):
+        sub = next(
+            s for s in client.get("/api/subjects").json() if s["name"] == "IPA"
+        )
+        res = client.patch(
+            f"/api/subjects/{sub['id']}",
+            headers=admin_headers,
+            json={"name": "Matematika"},
+        )
+        assert res.status_code == 409
+        assert "sudah ada" in res.json()["detail"]
+
+    def test_rename_race_unique_violation_becomes_409(
+        self, client, admin_auth, admin_headers, monkeypatch
+    ):
+        """Balapan antara pre-check nama dan update: DB menolak lewat unique
+        constraint — harus 409 ramah, bukan 500."""
+        from postgrest.exceptions import APIError
+
+        from conftest import Query
+
+        sub = next(
+            s for s in client.get("/api/subjects").json() if s["name"] == "IPA"
+        )
+
+        real_execute = Query.execute
+
+        def flaky_execute(self):
+            if self.table == "subjects" and self.op == "update":
+                raise APIError({"code": "23505", "message": "duplicate key"})
+            return real_execute(self)
+
+        monkeypatch.setattr(Query, "execute", flaky_execute)
+        res = client.patch(
+            f"/api/subjects/{sub['id']}",
+            headers=admin_headers,
+            json={"name": "Baru Banget"},
+        )
+        assert res.status_code == 409
+
+    def test_rename_requires_admin(self, client, sb):
+        sub = next(s for s in client.get("/api/subjects").json() if s["name"] == "IPA")
+        res = client.patch(f"/api/subjects/{sub['id']}", json={"name": "X"})
+        assert res.status_code == 401
 
     def test_delete_not_found(self, client, admin_auth, admin_headers):
         res = client.delete("/api/subjects/tidak-ada", headers=admin_headers)

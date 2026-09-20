@@ -159,6 +159,133 @@ class TestExamTypes:
         assert res.json()["name"] == "Baru"
         assert sb.tables["exam_types"][0]["jumlah_soal"] == 20
 
+    def test_update_explicit_null_clears_optional_fields(self, client, admin_auth, admin_headers):
+        """Edit penuh: field opsional yang dikirim null dikosongkan kembali
+        (ikut konfigurasi kelas)."""
+        sb = admin_auth
+        sb.tables["exam_types"] = [
+            {
+                "id": "et-1",
+                "name": "Lama",
+                "jumlah_soal": 20,
+                "durasi_menit": 45,
+                "tipe_soal": {"pilihan_ganda": 10, "isian": 10},
+                "poin_per_tipe": {"deskripsi": 10},
+            }
+        ]
+        res = client.patch(
+            "/api/exam-types/et-1",
+            json={"name": "Lama", "jumlah_soal": None, "durasi_menit": None, "tipe_soal": None, "poin_per_tipe": None},
+            headers=admin_headers,
+        )
+        assert res.status_code == 200
+        row = sb.tables["exam_types"][0]
+        assert row["jumlah_soal"] is None
+        assert row["durasi_menit"] is None
+        assert row["tipe_soal"] is None
+        assert row["poin_per_tipe"] is None
+
+    def test_update_omitted_field_unchanged(self, client, admin_auth, admin_headers):
+        sb = admin_auth
+        sb.tables["exam_types"] = [
+            {
+                "id": "et-1",
+                "name": "Lama",
+                "jumlah_soal": 20,
+                "durasi_menit": 45,
+                "tipe_soal": {"pilihan_ganda": 10, "isian": 10},
+            }
+        ]
+        res = client.patch(
+            "/api/exam-types/et-1",
+            json={"name": "Baru"},
+            headers=admin_headers,
+        )
+        assert res.status_code == 200
+        row = sb.tables["exam_types"][0]
+        # Field yang tidak dikirim tidak berubah
+        assert row["jumlah_soal"] == 20
+        assert row["durasi_menit"] == 45
+        assert row["tipe_soal"] == {"pilihan_ganda": 10, "isian": 10}
+
+    def test_update_duplicate_name_409(self, client, admin_auth, admin_headers):
+        sb = admin_auth
+        sb.tables["exam_types"] = [
+            {"id": "et-1", "name": "Lama", "jumlah_soal": None, "durasi_menit": None},
+            {"id": "et-2", "name": "Lain", "jumlah_soal": None, "durasi_menit": None},
+        ]
+        res = client.patch(
+            "/api/exam-types/et-1",
+            json={"name": "Lain"},
+            headers=admin_headers,
+        )
+        assert res.status_code == 409
+        assert "sudah ada" in res.json()["detail"]
+
+    def test_update_keep_own_name_allowed(self, client, admin_auth, admin_headers):
+        """Mengirim nama sendiri (tidak berubah) tidak dianggap duplikat."""
+        sb = admin_auth
+        sb.tables["exam_types"] = [
+            {"id": "et-1", "name": "Lama", "jumlah_soal": None, "durasi_menit": None}
+        ]
+        res = client.patch(
+            "/api/exam-types/et-1",
+            json={"name": "Lama", "jumlah_soal": 15},
+            headers=admin_headers,
+        )
+        assert res.status_code == 200
+
+    def test_update_invalid_ranges_422(self, client, admin_auth, admin_headers):
+        sb = admin_auth
+        sb.tables["exam_types"] = [
+            {"id": "et-1", "name": "Lama", "jumlah_soal": None, "durasi_menit": None}
+        ]
+        res = client.patch(
+            "/api/exam-types/et-1",
+            json={"name": "Lama", "jumlah_soal": 3},
+            headers=admin_headers,
+        )
+        assert res.status_code == 422
+        res = client.patch(
+            "/api/exam-types/et-1",
+            json={"name": "Lama", "durasi_menit": 200},
+            headers=admin_headers,
+        )
+        assert res.status_code == 422
+
+    def test_update_empty_name_422(self, client, admin_auth, admin_headers):
+        sb = admin_auth
+        sb.tables["exam_types"] = [
+            {"id": "et-1", "name": "Lama", "jumlah_soal": None, "durasi_menit": None}
+        ]
+        res = client.patch(
+            "/api/exam-types/et-1",
+            json={"name": "   "},
+            headers=admin_headers,
+        )
+        assert res.status_code == 422
+
+    def test_update_not_found(self, client, admin_auth, admin_headers):
+        res = client.patch(
+            "/api/exam-types/tidak-ada", json={"name": "X"}, headers=admin_headers
+        )
+        assert res.status_code == 404
+
+    def test_create_duplicate_409(self, client, admin_auth, admin_headers):
+        res = client.post(
+            "/api/exam-types",
+            json={"name": "Ujian Harian"},
+            headers=admin_headers,
+        )
+        assert res.status_code == 201
+        res = client.post(
+            "/api/exam-types",
+            json={"name": "Ujian Harian"},
+            headers=admin_headers,
+        )
+        assert res.status_code == 409
+        assert "sudah ada" in res.json()["detail"]
+
     def test_delete_free(self, client, admin_auth, admin_headers):
         sb = admin_auth
         sb.tables["exam_types"] = [

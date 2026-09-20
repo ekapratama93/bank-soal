@@ -15,7 +15,13 @@ from ..llm import LLMError, _split_counts, generate_quiz, grade_short_answers
 from ..text_match import grade_isian
 from ..subjects import VALID_GRADES
 from ..supabase_client import get_supabase
-from .materials import require_admin
+from .materials import (
+    require_admin,
+    resolve_subject,
+    subject_columns,
+    subject_display_name,
+    subject_names_map,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,14 +57,16 @@ async def _resolve_images(sb, questions: list[dict]) -> None:
 
 
 class GenerateRequest(BaseModel):
-    subject: str
+    subject_id: str | None = None
+    subject: str | None = None
     grade: int
     exam_type_id: str
     jumlah_paket: int = Field(default=3, ge=1, le=5)
 
 
 class QuizRequest(BaseModel):
-    subject: str
+    subject_id: str | None = None
+    subject: str | None = None
     grade: int
     exam_type_id: str
     served_ids: list[str] = Field(default_factory=list, max_length=100)
@@ -92,17 +100,19 @@ class SubmitRequest(BaseModel):
 
 
 class PoolResetRequest(BaseModel):
-    subject: str
+    subject_id: str | None = None
+    subject: str | None = None
     grade: int
     exam_type_id: str
 
 
-def _validate_subject_grade(sb, subject: str, grade: int):
-    res = sb.table("subjects").select("id").eq("name", subject).execute()
-    if not res.data:
-        raise HTTPException(status_code=422, detail="Mata pelajaran tidak valid")
+def _validate_subject_grade(sb, *, subject_id=None, subject=None, grade: int) -> dict:
+    """Resolve subject (id baru / nama legacy) + validasi kelas — mengembalikan
+    baris subjects (dipakai untuk prompt AI dan penulisan subject_id)."""
+    sub = resolve_subject(sb, subject_id=subject_id, subject=subject)
     if grade not in VALID_GRADES:
         raise HTTPException(status_code=422, detail="Kelas tidak valid")
+    return sub
 
 
 def _get_exam_type(sb, exam_type_id: str) -> dict:
@@ -139,12 +149,19 @@ def _exam_type_row(sb, quiz: dict) -> dict | None:
     return res.data[0] if res.data else None
 
 
+def _display_subject(quiz: dict, names: dict[str, str]) -> str:
+    """Nama mapel untuk tampilan — peta subjects menang (rename langsung
+    tampil); teks baris hanya untuk baris lawas tanpa subject_id."""
+    return subject_display_name(quiz.get("subject_id"), quiz.get("subject"), names)
+
+
 def _quiz_public(sb, quiz: dict, attempt: dict) -> dict:
     row = _exam_type_row(sb, quiz)
     return {
         "quiz_id": quiz["id"],
         "questions": _strip_questions(quiz["questions"]),
-        "subject": quiz["subject"],
+        "subject_id": quiz.get("subject_id"),
+        "subject": _display_subject(quiz, subject_names_map(sb)),
         "grade": quiz["grade"],
         "exam_type": (row or {}).get("name", ""),
         "durasi_menit": quiz.get("durasi_menit"),
@@ -223,7 +240,9 @@ def _ensure_client_id(request: Request, response: Response) -> str:
 async def generate(body: GenerateRequest, admin: dict = Depends(require_admin)):
     """Admin: buat batch paket soal untuk kombinasi mapel+kelas+tipe ujian."""
     sb = get_supabase()
-    _validate_subject_grade(sb, body.subject, body.grade)
+    sub = _validate_subject_grade(
+        sb, subject_id=body.subject_id, subject=body.subject, grade=body.grade
+    )
     exam_type = _get_exam_type(sb, body.exam_type_id)
     cfg = get_config(body.grade)
     total = exam_type.get("jumlah_soal") or cfg["jumlah_soal"]
@@ -244,7 +263,7 @@ async def generate(body: GenerateRequest, admin: dict = Depends(require_admin)):
     materials = (
         sb.table("materials")
         .select("title, content")
-        .eq("subject", body.subject)
+        .eq("subject_id", sub["id"])
         .eq("grade", body.grade)
         .eq("exam_type_id", body.exam_type_id)
         .execute()
@@ -260,7 +279,7 @@ async def generate(body: GenerateRequest, admin: dict = Depends(require_admin)):
     for _ in range(body.jumlah_paket):
         try:
             questions = await generate_quiz(
-                body.subject, body.grade, counts, material_text
+                sub["name"], body.grade, counts, material_text
             )
         except LLMError as e:
             if not created:
@@ -271,7 +290,7 @@ async def generate(body: GenerateRequest, admin: dict = Depends(require_admin)):
             sb.table("quizzes")
             .insert(
                 {
-                    "subject": body.subject,
+                    **subject_columns(sub),
                     "grade": body.grade,
                     "exam_type_id": body.exam_type_id,
                     "questions": questions,
@@ -296,14 +315,16 @@ async def request_quiz(body: QuizRequest, response: Response, request: Request):
     """Siswa: terima satu paket acak dari pool yang sudah dibuat admin."""
     sb = get_supabase()
     client_id = _ensure_client_id(request, response)
-    _validate_subject_grade(sb, body.subject, body.grade)
+    sub = _validate_subject_grade(
+        sb, subject_id=body.subject_id, subject=body.subject, grade=body.grade
+    )
     _get_exam_type(sb, body.exam_type_id)
     served = set(body.served_ids)
 
     pool = (
         sb.table("quizzes")
         .select("*")
-        .eq("subject", body.subject)
+        .eq("subject_id", sub["id"])
         .eq("grade", body.grade)
         .eq("exam_type_id", body.exam_type_id)
         .execute()
@@ -337,32 +358,47 @@ def available():
     sb = get_supabase()
     quizzes = (
         sb.table("quizzes")
-        .select("subject, grade, exam_type_id, started")
+        .select("subject, subject_id, grade, exam_type_id, started")
         .execute()
         .data
         or []
     )
     types = sb.table("exam_types").select("id, name").execute().data or []
     names = {t["id"]: t["name"] for t in types}
+    sub_names = subject_names_map(sb)
 
+    # Kunci agregasi memakai subject_id (baru); baris lama tanpa subject_id
+    # dikelompokkan lewat teks subject-nya.
     agg: dict[tuple, dict] = {}
     for q in quizzes:
-        key = (q["subject"], q["grade"], q["exam_type_id"])
-        entry = agg.setdefault(key, {"unstarted": 0, "total": 0})
+        sid = q.get("subject_id")
+        key = (sid or q.get("subject") or "", q["grade"], q["exam_type_id"])
+        entry = agg.setdefault(
+            key,
+            {
+                "subject_id": sid,
+                "subject": sub_names.get(sid, "") or q.get("subject") or "",
+                "unstarted": 0,
+                "total": 0,
+            },
+        )
         entry["total"] += 1
         if not q.get("started"):
             entry["unstarted"] += 1
 
     return [
         {
-            "subject": subject,
+            "subject_id": entry["subject_id"],
+            "subject": entry["subject"],
             "grade": grade,
             "exam_type_id": exam_type_id,
             "exam_type": names.get(exam_type_id, ""),
             "unstarted": entry["unstarted"],
             "total": entry["total"],
         }
-        for (subject, grade, exam_type_id), entry in sorted(agg.items())
+        for (_sid, grade, exam_type_id), entry in sorted(
+            agg.items(), key=lambda kv: (kv[1]["subject"], kv[0][1], kv[0][2])
+        )
     ]
 
 
@@ -382,7 +418,10 @@ def list_attempts(response: Response, request: Request):
     )
     attempts = [a for a in attempts if a.get("submitted_at")]
     quizzes = (
-        sb.table("quizzes").select("id, subject, grade, exam_type_id").execute().data
+        sb.table("quizzes")
+        .select("id, subject, subject_id, grade, exam_type_id")
+        .execute()
+        .data
         or []
     )
     quiz_map = {q["id"]: q for q in quizzes}
@@ -390,10 +429,12 @@ def list_attempts(response: Response, request: Request):
         t["id"]: t["name"]
         for t in (sb.table("exam_types").select("id, name").execute().data or [])
     }
+    sub_names = subject_names_map(sb)
     return [
         {
             "quiz_id": a["quiz_id"],
-            "subject": quiz_map.get(a["quiz_id"], {}).get("subject", ""),
+            "subject_id": quiz_map.get(a["quiz_id"], {}).get("subject_id"),
+            "subject": _display_subject(quiz_map.get(a["quiz_id"], {}), sub_names),
             "grade": quiz_map.get(a["quiz_id"], {}).get("grade", 0),
             "exam_type": exam_names.get(
                 quiz_map.get(a["quiz_id"], {}).get("exam_type_id", ""), ""
@@ -416,6 +457,7 @@ def list_attempts(response: Response, request: Request):
 
 @router.get("/admin/list")
 def admin_list_quizzes(
+    subject_id: str | None = None,
     subject: str | None = None,
     grade: int | None = None,
     exam_type_id: str | None = None,
@@ -424,8 +466,13 @@ def admin_list_quizzes(
     """Admin: daftar semua paket soal (metadata saja, tanpa isi soal)."""
     sb = get_supabase()
     query = sb.table("quizzes").select("*").order("created_at", desc=True)
-    if subject:
-        query = query.eq("subject", subject)
+    if subject_id:
+        query = query.eq("subject_id", subject_id)
+    elif subject:
+        # Filter legacy (nama) — diresolvakan ke subject_id supaya memakai
+        # indeks dan tetap bekerja setelah kolom teks dihapus di fase 2.
+        sub = resolve_subject(sb, subject=subject)
+        query = query.eq("subject_id", sub["id"])
     if grade is not None:
         query = query.eq("grade", grade)
     if exam_type_id:
@@ -435,10 +482,12 @@ def admin_list_quizzes(
         t["id"]: t["name"]
         for t in (sb.table("exam_types").select("id, name").execute().data or [])
     }
+    sub_names = subject_names_map(sb)
     return [
         {
             "id": q["id"],
-            "subject": q["subject"],
+            "subject_id": q.get("subject_id"),
+            "subject": _display_subject(q, sub_names),
             "grade": q["grade"],
             "exam_type_id": q["exam_type_id"],
             "exam_type": names.get(q["exam_type_id"], ""),
@@ -564,7 +613,8 @@ def _admin_quiz_payload(sb, quiz: dict) -> dict:
         questions.append(item)
     return {
         "id": quiz["id"],
-        "subject": quiz["subject"],
+        "subject_id": quiz.get("subject_id"),
+        "subject": _display_subject(quiz, subject_names_map(sb)),
         "grade": quiz["grade"],
         "exam_type_id": quiz["exam_type_id"],
         "exam_type": (row or {}).get("name", ""),
@@ -607,6 +657,24 @@ def admin_delete_quiz(quiz_id: str, admin: dict = Depends(require_admin)):
     return None
 
 
+class BulkDeleteRequest(BaseModel):
+    ids: list[str] = Field(max_length=200)
+
+
+@router.post("/admin/quizzes/bulk-delete")
+def bulk_delete_quizzes(body: BulkDeleteRequest, admin: dict = Depends(require_admin)):
+    """Admin: hapus banyak paket soal sekaligus (maks 200 id per permintaan).
+    Riwayat pengerjaan (attempts) ikut terhapus lewat "on delete cascade"
+    attempts.quiz_id di schema.sql — termasuk paket yang sudah pernah dibuka."""
+    if not body.ids:
+        raise HTTPException(status_code=422, detail="Daftar id paket soal kosong")
+    sb = get_supabase()
+    # Dedupe dengan menjaga urutan — id ganda cukup dihapus sekali.
+    ids = list(dict.fromkeys(body.ids))
+    removed = sb.table("quizzes").delete().in_("id", ids).execute()
+    return {"deleted": len(removed.data)}
+
+
 @router.get("/{quiz_id}")
 def get_quiz(quiz_id: str, response: Response, request: Request):
     sb = get_supabase()
@@ -622,12 +690,14 @@ def get_quiz(quiz_id: str, response: Response, request: Request):
 @router.post("/pool/reset")
 def reset_pool(body: PoolResetRequest, admin: dict = Depends(require_admin)):
     sb = get_supabase()
-    _validate_subject_grade(sb, body.subject, body.grade)
+    sub = _validate_subject_grade(
+        sb, subject_id=body.subject_id, subject=body.subject, grade=body.grade
+    )
     _get_exam_type(sb, body.exam_type_id)
     removed = (
         sb.table("quizzes")
         .delete()
-        .eq("subject", body.subject)
+        .eq("subject_id", sub["id"])
         .eq("grade", body.grade)
         .eq("exam_type_id", body.exam_type_id)
         .eq("started", False)
@@ -661,7 +731,8 @@ async def submit(
         score = attempt["score"]
         return {
             "quiz_id": quiz_id,
-            "subject": quiz["subject"],
+            "subject_id": quiz.get("subject_id"),
+            "subject": _display_subject(quiz, subject_names_map(sb)),
             "grade": quiz["grade"],
             "exam_type": (exam_row or {}).get("name", ""),
             "nilai": score.get("nilai", 0),
@@ -792,7 +863,8 @@ async def submit(
 
     return {
         "quiz_id": quiz_id,
-        "subject": quiz["subject"],
+        "subject_id": quiz.get("subject_id"),
+        "subject": _display_subject(quiz, subject_names_map(sb)),
         "grade": quiz["grade"],
         "exam_type": (exam_row or {}).get("name", ""),
         "nilai": nilai,

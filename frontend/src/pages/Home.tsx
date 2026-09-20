@@ -125,14 +125,14 @@ export default function Home() {
   // Kombinasi yang benar-benar punya paket soal ter-generate
   const availableSubjects = useMemo(() => {
     if (available === null) return subjects;
-    const names = new Set(available.map((a) => a.subject));
-    return subjects.filter((s) => names.has(s.name));
+    const ids = new Set(available.map((a) => a.subject_id));
+    return subjects.filter((s) => ids.has(s.id));
   }, [subjects, available]);
 
   const availableGrades = useMemo(() => {
     if (available === null || !subject) return GRADES;
     const grades = new Set(
-      available.filter((a) => a.subject === subject).map((a) => a.grade)
+      available.filter((a) => a.subject_id === subject).map((a) => a.grade)
     );
     return GRADES.filter((g) => grades.has(g));
   }, [available, subject]);
@@ -141,7 +141,7 @@ export default function Home() {
     if (available === null || !subject || grade === null) return examTypes;
     const ids = new Set(
       available
-        .filter((a) => a.subject === subject && a.grade === grade)
+        .filter((a) => a.subject_id === subject && a.grade === grade)
         .map((a) => a.exam_type_id)
     );
     return examTypes.filter((t) => ids.has(t.id));
@@ -149,8 +149,8 @@ export default function Home() {
 
   // Rapikan pilihan saat daftar tersedia berubah
   useEffect(() => {
-    if (!availableSubjects.some((s) => s.name === subject) && availableSubjects.length > 0) {
-      setSubject(availableSubjects[0].name);
+    if (!availableSubjects.some((s) => s.id === subject) && availableSubjects.length > 0) {
+      setSubject(availableSubjects[0].id);
     }
   }, [availableSubjects, subject]);
 
@@ -438,7 +438,7 @@ export default function Home() {
                 </SelectTrigger>
                 <SelectContent>
                   {availableSubjects.map((s) => (
-                    <SelectItem key={s.id} value={s.name}>
+                    <SelectItem key={s.id} value={s.id}>
                       {s.name}
                     </SelectItem>
                   ))}

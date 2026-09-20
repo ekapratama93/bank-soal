@@ -183,10 +183,82 @@ class TestMaterials:
         created = res.json()
         assert created["title"] == "Fotosintesis"
         assert created["created_by"] == "admin@sekolah.id"
+        # Respons membawa subject (nama) + subject_id
+        assert created["subject"] == "IPA"
+        assert created["subject_id"] == "sub-4"
 
         res = client.get("/api/materials", headers=admin_headers)
         assert res.status_code == 200
+        rows = res.json()
+        assert len(rows) == 1
+        # Baris tersimpan menulis keduanya (masa transisi)
+        assert rows[0]["subject"] == "IPA"
+        assert rows[0]["subject_id"] == "sub-4"
+
+    def test_create_with_subject_id(self, client, admin_auth, admin_headers):
+        """Payload baru: subject_id menang dan respons tetap membawa nama."""
+        exam_type_id = self._exam_type(admin_auth)
+        res = client.post(
+            "/api/materials",
+            headers=admin_headers,
+            json={
+                "subject_id": "sub-4",
+                "grade": 5,
+                "exam_type_id": exam_type_id,
+                "title": "x",
+                "content": "y",
+            },
+        )
+        assert res.status_code == 201
+        body = res.json()
+        assert body["subject_id"] == "sub-4"
+        assert body["subject"] == "IPA"
+        stored = admin_auth.tables["materials"][0]
+        assert stored["subject_id"] == "sub-4"
+        assert stored["subject"] == "IPA"
+
+    def test_create_both_fields_subject_id_wins(self, client, admin_auth, admin_headers):
+        exam_type_id = self._exam_type(admin_auth)
+        res = client.post(
+            "/api/materials",
+            headers=admin_headers,
+            json={
+                "subject": "IPA",
+                "subject_id": "sub-1",
+                "grade": 5,
+                "exam_type_id": exam_type_id,
+                "title": "x",
+                "content": "y",
+            },
+        )
+        assert res.status_code == 201
+        assert admin_auth.tables["materials"][0]["subject_id"] == "sub-1"
+
+    def test_create_neither_subject_422(self, client, admin_auth, admin_headers):
+        exam_type_id = self._exam_type(admin_auth)
+        res = client.post(
+            "/api/materials",
+            headers=admin_headers,
+            json={"grade": 5, "exam_type_id": exam_type_id, "title": "x", "content": "y"},
+        )
+        assert res.status_code == 422
+        assert "subject_id" in res.json()["detail"]
+
+    def test_list_filter_by_subject_id(self, client, admin_auth, admin_headers):
+        exam_type_id = self._exam_type(admin_auth)
+        client.post(
+            "/api/materials",
+            headers=admin_headers,
+            json={"subject_id": "sub-4", "grade": 5, "exam_type_id": exam_type_id, "title": "IPA", "content": "y"},
+        )
+        client.post(
+            "/api/materials",
+            headers=admin_headers,
+            json={"subject": "Matematika", "grade": 3, "exam_type_id": exam_type_id, "title": "MTK", "content": "y"},
+        )
+        res = client.get("/api/materials?subject_id=sub-4", headers=admin_headers)
         assert len(res.json()) == 1
+        assert res.json()[0]["title"] == "IPA"
 
     def test_create_invalid_payload(self, client, admin_auth, admin_headers):
         exam_type_id = self._exam_type(admin_auth)
@@ -358,6 +430,7 @@ class TestMaterials:
             {
                 "id": quiz_id,
                 "subject": "IPA",
+                "subject_id": "sub-4",
                 "grade": 5,
                 "exam_type_id": exam_type_id,
                 "questions": [],

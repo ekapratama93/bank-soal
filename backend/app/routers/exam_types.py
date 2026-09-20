@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from ..db_errors import is_fk_violation
+from ..db_errors import is_fk_violation, is_unique_violation
 from ..supabase_client import get_supabase
 from .materials import require_admin
 
@@ -81,7 +81,13 @@ def create_exam_type(body: ExamTypeIn, admin: dict = Depends(require_admin)):
     if body.durasi_menit is not None and not 10 <= body.durasi_menit <= 180:
         raise HTTPException(status_code=422, detail="Durasi harus 10-180 menit")
     sb = get_supabase()
-    data = {"name": body.name.strip()}
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Nama tipe ujian kosong")
+    duplicate = sb.table("exam_types").select("id").eq("name", name).execute()
+    if duplicate.data:
+        raise HTTPException(status_code=409, detail="Tipe ujian sudah ada")
+    data = {"name": name}
     if body.jumlah_soal is not None:
         data["jumlah_soal"] = body.jumlah_soal
     if body.durasi_menit is not None:
@@ -92,7 +98,14 @@ def create_exam_type(body: ExamTypeIn, admin: dict = Depends(require_admin)):
     poin_per_tipe = _validate_poin_per_tipe(body.poin_per_tipe)
     if poin_per_tipe is not None:
         data["poin_per_tipe"] = poin_per_tipe
-    res = sb.table("exam_types").insert(data).execute()
+    try:
+        res = sb.table("exam_types").insert(data).execute()
+    except Exception as e:
+        # Balapan antara pre-check dan insert — DB menolak lewat unique
+        # constraint, bukan 500 mentah.
+        if not is_unique_violation(e):
+            raise
+        raise HTTPException(status_code=409, detail="Tipe ujian sudah ada")
     return res.data[0]
 
 
@@ -100,26 +113,44 @@ def create_exam_type(body: ExamTypeIn, admin: dict = Depends(require_admin)):
 def update_exam_type(
     exam_type_id: str, body: ExamTypeIn, admin: dict = Depends(require_admin)
 ):
+    """Edit penuh tipe ujian. `model_fields_set` membedakan field yang DIKIRIM
+    vs yang tidak: dikirim sebagai null → kolom opsional dikosongkan kembali
+    (ikut konfigurasi kelas); tidak dikirim → tidak diubah."""
     sb = get_supabase()
     existing = sb.table("exam_types").select("id").eq("id", exam_type_id).execute()
     if not existing.data:
         raise HTTPException(status_code=404, detail="Tipe ujian tidak ditemukan")
-    data = {"name": body.name.strip()}
-    if body.jumlah_soal is not None:
-        if not 5 <= body.jumlah_soal <= 50:
+    data: dict = {}
+    if "name" in body.model_fields_set:
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="Nama tipe ujian kosong")
+        duplicate = sb.table("exam_types").select("id").eq("name", name).execute()
+        if duplicate.data and duplicate.data[0]["id"] != exam_type_id:
+            raise HTTPException(status_code=409, detail="Tipe ujian sudah ada")
+        data["name"] = name
+    if "jumlah_soal" in body.model_fields_set:
+        if body.jumlah_soal is not None and not 5 <= body.jumlah_soal <= 50:
             raise HTTPException(status_code=422, detail="Jumlah soal harus 5-50")
         data["jumlah_soal"] = body.jumlah_soal
-    if body.durasi_menit is not None:
-        if not 10 <= body.durasi_menit <= 180:
+    if "durasi_menit" in body.model_fields_set:
+        if body.durasi_menit is not None and not 10 <= body.durasi_menit <= 180:
             raise HTTPException(status_code=422, detail="Durasi harus 10-180")
         data["durasi_menit"] = body.durasi_menit
-    tipe_soal = _validate_tipe_soal(body.tipe_soal)
-    if tipe_soal is not None:
-        data["tipe_soal"] = tipe_soal
-    poin_per_tipe = _validate_poin_per_tipe(body.poin_per_tipe)
-    if poin_per_tipe is not None:
-        data["poin_per_tipe"] = poin_per_tipe
-    res = sb.table("exam_types").update(data).eq("id", exam_type_id).execute()
+    if "tipe_soal" in body.model_fields_set:
+        data["tipe_soal"] = _validate_tipe_soal(body.tipe_soal)
+    if "poin_per_tipe" in body.model_fields_set:
+        data["poin_per_tipe"] = _validate_poin_per_tipe(body.poin_per_tipe)
+    if not data:
+        return sb.table("exam_types").select("*").eq("id", exam_type_id).execute().data[0]
+    try:
+        res = sb.table("exam_types").update(data).eq("id", exam_type_id).execute()
+    except Exception as e:
+        # Balapan antara pre-check nama dan update — DB menolak lewat unique
+        # constraint, bukan 500 mentah.
+        if not is_unique_violation(e):
+            raise
+        raise HTTPException(status_code=409, detail="Tipe ujian sudah ada")
     return res.data[0] if res.data else None
 
 

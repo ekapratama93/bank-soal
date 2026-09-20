@@ -1,5 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, generateBatch, getAttempts, getQuiz, submitQuiz } from "./client";
+import {
+  ApiError,
+  bulkDeleteQuizPackages,
+  generateBatch,
+  getAttempts,
+  getQuiz,
+  renameSubject,
+  submitQuiz,
+  updateExamType,
+} from "./client";
 import { getClockOffset, resetServerTime } from "../lib/serverTime";
 
 function jsonResponse(body: unknown, init: ResponseInit = {}) {
@@ -120,7 +129,7 @@ describe("endpoint yang memanggil AI di server memakai tenggang lebih panjang", 
 
     let settled = false;
     const pending = generateBatch("tok", {
-      subject: "IPA",
+      subject_id: "sub-4",
       grade: 5,
       exam_type_id: "et-1",
       jumlah_paket: 3,
@@ -137,5 +146,58 @@ describe("endpoint yang memanggil AI di server memakai tenggang lebih panjang", 
     expect(settled).toBe(true);
     expect(err).toBeInstanceOf(ApiError);
     expect(err.message).toBe("Server terlalu lama merespons.");
+  });
+});
+
+describe("endpoint admin baru", () => {
+  it("renameSubject memanggil PATCH /api/subjects/{id} dengan nama baru", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ id: "sub-4", name: "Ilmu Pengetahuan Alam" })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      renameSubject("tok", "sub-4", "Ilmu Pengetahuan Alam")
+    ).resolves.toEqual({ id: "sub-4", name: "Ilmu Pengetahuan Alam" });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/subjects/sub-4");
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(init.body)).toEqual({ name: "Ilmu Pengetahuan Alam" });
+    expect(init.headers.Authorization).toBe("Bearer tok");
+  });
+
+  it("updateExamType memanggil PATCH /api/exam-types/{id} dengan payload penuh", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ id: "et-1", name: "Ujian Harian" })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await updateExamType("tok", "et-1", {
+      name: "Ujian Harian",
+      jumlah_soal: null,
+      durasi_menit: 30,
+      tipe_soal: null,
+      poin_per_tipe: { deskripsi: 10 },
+    });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/exam-types/et-1");
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(init.body)).toEqual({
+      name: "Ujian Harian",
+      jumlah_soal: null,
+      durasi_menit: 30,
+      tipe_soal: null,
+      poin_per_tipe: { deskripsi: 10 },
+    });
+  });
+
+  it("bulkDeleteQuizPackages memanggil bulk-delete dengan daftar id", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ deleted: 2 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      bulkDeleteQuizPackages("tok", ["q-1", "q-2"])
+    ).resolves.toEqual({ deleted: 2 });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/quiz/admin/quizzes/bulk-delete");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({ ids: ["q-1", "q-2"] });
   });
 });

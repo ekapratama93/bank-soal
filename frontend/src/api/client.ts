@@ -29,6 +29,7 @@ export interface ExamType {
 export interface QuizResponse {
   quiz_id: string;
   questions: QuestionPublic[];
+  subject_id?: string | null;
   subject: string;
   grade: number;
   exam_type: string;
@@ -57,6 +58,7 @@ export interface PerQuestionResult {
 
 export interface SubmitResponse {
   quiz_id: string;
+  subject_id?: string | null;
   subject: string;
   grade: number;
   exam_type: string;
@@ -69,6 +71,7 @@ export interface SubmitResponse {
 
 export interface Material {
   id: string;
+  subject_id?: string | null;
   subject: string;
   grade: number;
   exam_type_id: string;
@@ -81,7 +84,7 @@ export interface Material {
 }
 
 export interface MaterialInput {
-  subject: string;
+  subject_id: string;
   grade: number;
   exam_type_id: string;
   title: string;
@@ -89,6 +92,7 @@ export interface MaterialInput {
 }
 
 export interface AvailableCombo {
+  subject_id?: string | null;
   subject: string;
   grade: number;
   exam_type_id: string;
@@ -99,6 +103,7 @@ export interface AvailableCombo {
 
 export interface QuizPackage {
   id: string;
+  subject_id?: string | null;
   subject: string;
   grade: number;
   exam_type_id: string;
@@ -134,7 +139,7 @@ export interface QuizPackageDetail extends QuizPackage {
 }
 
 export interface QuizPackageFilters {
-  subject?: string;
+  subject_id?: string;
   grade?: number;
   exam_type_id?: string;
 }
@@ -238,6 +243,14 @@ export function createSubject(token: string, name: string): Promise<Subject> {
   });
 }
 
+export function renameSubject(token: string, id: string, name: string): Promise<Subject> {
+  return request(`/api/subjects/${id}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+}
+
 export function deleteSubject(token: string, id: string): Promise<void> {
   return request(`/api/subjects/${id}`, {
     method: "DELETE",
@@ -246,7 +259,7 @@ export function deleteSubject(token: string, id: string): Promise<void> {
 }
 
 export function requestQuiz(
-  subject: string,
+  subjectId: string,
   grade: number,
   examTypeId: string,
   servedIds: string[]
@@ -255,7 +268,7 @@ export function requestQuiz(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      subject,
+      subject_id: subjectId,
       grade,
       exam_type_id: examTypeId,
       served_ids: servedIds,
@@ -265,7 +278,7 @@ export function requestQuiz(
 
 export function generateBatch(
   token: string,
-  data: { subject: string; grade: number; exam_type_id: string; jumlah_paket: number }
+  data: { subject_id: string; grade: number; exam_type_id: string; jumlah_paket: number }
 ): Promise<{ generated: number; quiz_ids: string[] }> {
   return request(
     "/api/quiz/generate",
@@ -311,16 +324,7 @@ export function getMaterials(token: string): Promise<Material[]> {
   });
 }
 
-export function createMaterial(
-  token: string,
-  data: {
-    subject: string;
-    grade: number;
-    exam_type_id: string;
-    title: string;
-    content: string;
-  }
-): Promise<Material> {
+export function createMaterial(token: string, data: MaterialInput): Promise<Material> {
   return request("/api/materials", {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -353,6 +357,7 @@ export function updateMaterial(
 
 export interface AttemptResult {
   quiz_id: string;
+  subject_id?: string | null;
   subject: string;
   grade: number;
   exam_type: string;
@@ -370,7 +375,7 @@ export function getAttempts(): Promise<AttemptResult[]> {
 
 export function resetPool(
   token: string,
-  data: { subject: string; grade: number; exam_type_id: string }
+  data: { subject_id: string; grade: number; exam_type_id: string }
 ): Promise<{ deleted: number }> {
   return request("/api/quiz/pool/reset", {
     method: "POST",
@@ -386,18 +391,27 @@ export function deleteMaterial(token: string, id: string): Promise<void> {
   });
 }
 
-export function createExamType(
-  token: string,
-  data: {
-    name: string;
-    jumlah_soal: number | null;
-    durasi_menit: number | null;
-    tipe_soal: TipeSoalConfig | null;
-    poin_per_tipe: TipeSoalConfig | null;
-  }
-): Promise<ExamType> {
+export interface ExamTypeInput {
+  name: string;
+  jumlah_soal: number | null;
+  durasi_menit: number | null;
+  tipe_soal: TipeSoalConfig | null;
+  poin_per_tipe: TipeSoalConfig | null;
+}
+
+export function createExamType(token: string, data: ExamTypeInput): Promise<ExamType> {
   return request("/api/exam-types", {
     method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+}
+
+/** Edit penuh tipe ujian — payload sama dengan create; field opsional yang
+ * dikirim null dikosongkan kembali di backend. */
+export function updateExamType(token: string, id: string, data: ExamTypeInput): Promise<ExamType> {
+  return request(`/api/exam-types/${id}`, {
+    method: "PATCH",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
@@ -415,7 +429,7 @@ export function getQuizPackages(
   filters: QuizPackageFilters = {}
 ): Promise<QuizPackage[]> {
   const params = new URLSearchParams();
-  if (filters.subject) params.set("subject", filters.subject);
+  if (filters.subject_id) params.set("subject_id", filters.subject_id);
   if (filters.grade !== undefined) params.set("grade", String(filters.grade));
   if (filters.exam_type_id) params.set("exam_type_id", filters.exam_type_id);
   const qs = params.toString();
@@ -437,6 +451,14 @@ export function deleteQuizPackage(token: string, id: string): Promise<void> {
   return request(`/api/quiz/admin/quizzes/${id}`, {
     method: "DELETE",
     headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export function bulkDeleteQuizPackages(token: string, ids: string[]): Promise<{ deleted: number }> {
+  return request("/api/quiz/admin/quizzes/bulk-delete", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ ids }),
   });
 }
 
