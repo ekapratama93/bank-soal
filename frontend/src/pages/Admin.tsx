@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   ApiError,
   bulkDeleteQuizPackages,
@@ -213,6 +213,53 @@ export default function Admin() {
   const [resetError, setResetError] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
   const [genJumlahPaket, setGenJumlahPaket] = useState<number>(3);
+
+  // Pool hanya boleh memakai kombinasi mapel + kelas + tipe ujian yang materinya
+  // sudah diunggah, supaya generate tidak jatuh ke kurikulum umum tanpa disadari.
+  const poolSubjects = useMemo(
+    () => subjects.filter((s) => materials.some((m) => m.subject_id === s.id)),
+    [subjects, materials]
+  );
+  const poolGrades = useMemo(
+    () =>
+      GRADES.filter((g) =>
+        materials.some((m) => m.subject_id === resetSubject && m.grade === g)
+      ),
+    [materials, resetSubject]
+  );
+  const poolExamTypes = useMemo(
+    () =>
+      examTypes.filter((t) =>
+        materials.some(
+          (m) =>
+            m.subject_id === resetSubject &&
+            m.grade === resetGrade &&
+            m.exam_type_id === t.id
+        )
+      ),
+    [examTypes, materials, resetSubject, resetGrade]
+  );
+
+  useEffect(() => {
+    if (poolSubjects.length > 0 && !poolSubjects.some((s) => s.id === resetSubject)) {
+      setResetSubject(poolSubjects[0].id);
+    }
+  }, [poolSubjects, resetSubject]);
+
+  useEffect(() => {
+    if (poolGrades.length > 0 && !poolGrades.includes(resetGrade)) {
+      setResetGrade(poolGrades[0]);
+    }
+  }, [poolGrades, resetGrade]);
+
+  useEffect(() => {
+    if (
+      poolExamTypes.length > 0 &&
+      !poolExamTypes.some((t) => t.id === resetExamTypeId)
+    ) {
+      setResetExamTypeId(poolExamTypes[0].id);
+    }
+  }, [poolExamTypes, resetExamTypeId]);
 
   const [subName, setSubName] = useState("");
   const [subError, setSubError] = useState<string | null>(null);
@@ -1617,14 +1664,23 @@ export default function Admin() {
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
+              {poolSubjects.length === 0 && (
+                <Alert variant="destructive">
+                  <AlertTriangle />
+                  <AlertDescription>
+                    Belum ada materi yang diunggah. Unggah materi dulu di tab Materi sebelum
+                    membuat paket soal.
+                  </AlertDescription>
+                </Alert>
+              )}
               <div className="flex flex-col gap-2">
                 <Label htmlFor="r-subject">Mata Pelajaran</Label>
                 <Select value={resetSubject} onValueChange={setResetSubject}>
                   <SelectTrigger id="r-subject">
-                    <SelectValue placeholder="Tidak ada mata pelajaran" />
+                    <SelectValue placeholder="Tidak ada materi tersedia" />
                   </SelectTrigger>
                   <SelectContent>
-                    {subjects.map((s) => (
+                    {poolSubjects.map((s) => (
                       <SelectItem key={s.id} value={s.id}>
                         {s.name}
                       </SelectItem>
@@ -1636,10 +1692,10 @@ export default function Admin() {
                 <Label htmlFor="r-grade">Kelas</Label>
                 <Select value={String(resetGrade)} onValueChange={(v) => setResetGrade(Number(v))}>
                   <SelectTrigger id="r-grade">
-                    <SelectValue />
+                    <SelectValue placeholder="Tidak ada materi tersedia" />
                   </SelectTrigger>
                   <SelectContent>
-                    {GRADES.map((g) => (
+                    {poolGrades.map((g) => (
                       <SelectItem key={g} value={String(g)}>
                         Kelas {g}
                       </SelectItem>
@@ -1654,7 +1710,7 @@ export default function Admin() {
                     <SelectValue placeholder="Tidak ada tipe ujian tersedia" />
                   </SelectTrigger>
                   <SelectContent>
-                    {examTypes.map((t) => (
+                    {poolExamTypes.map((t) => (
                       <SelectItem key={t.id} value={t.id}>
                         {t.name}
                       </SelectItem>
@@ -1690,8 +1746,9 @@ export default function Admin() {
                   onClick={() => void handleGenerateBatch()}
                   disabled={
                     generating ||
-                    examTypes.length === 0 ||
-                    subjects.length === 0 ||
+                    poolExamTypes.length === 0 ||
+                    poolSubjects.length === 0 ||
+                    poolGrades.length === 0 ||
                     !resetExamTypeId ||
                     !resetSubject
                   }
@@ -1704,8 +1761,9 @@ export default function Admin() {
                   onClick={() => void handleResetPool()}
                   disabled={
                     generating ||
-                    examTypes.length === 0 ||
-                    subjects.length === 0 ||
+                    poolExamTypes.length === 0 ||
+                    poolSubjects.length === 0 ||
+                    poolGrades.length === 0 ||
                     !resetExamTypeId ||
                     !resetSubject
                   }
