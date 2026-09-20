@@ -133,12 +133,39 @@ func TestGenerateQuizRetriesOnBadJSONThenSucceeds(t *testing.T) {
 	}
 }
 
-func TestGenerateQuizFailsAfterTwoAttempts(t *testing.T) {
+func TestGenerateQuizFailsAfterMaxAttempts(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write(chatOKResponse("bukan JSON"))
 	})
 	if _, err := c.GenerateQuiz(context.Background(), "IPA", 5, validCounts, "", nil); err == nil {
 		t.Fatal("expected an error")
+	}
+}
+
+// TestGenerateQuizRetriesOnChatErrorThenSucceeds covers the same policy as
+// TestGradeShortAnswersRetriesOnChatErrorThenSucceeds in grading_test.go:
+// GenerateQuiz must retry on a chat() failure (here, chat()'s own two
+// attempts both hitting a transient 503), not just on an invalid response.
+func TestGenerateQuizRetriesOnChatErrorThenSucceeds(t *testing.T) {
+	var calls int32
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&calls, 1)
+		if n <= 2 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write(chatOKResponse(validQuestionsJSON))
+	})
+	qs, err := c.GenerateQuiz(context.Background(), "IPA", 5, validCounts, "", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(qs) != 3 {
+		t.Fatalf("len = %d, want 3", len(qs))
+	}
+	if calls != 3 {
+		t.Errorf("calls = %d, want 3 (chat()'s own 2 attempts, then GenerateQuiz retries once more)", calls)
 	}
 }

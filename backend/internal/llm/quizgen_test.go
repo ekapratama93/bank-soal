@@ -3,6 +3,7 @@ package llm
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 const validQuestionsJSON = `{"questions": [
@@ -156,6 +157,28 @@ func TestValidateQuestionsGambarStockMissingQueryFails(t *testing.T) {
 	bad := strings.Replace(validQuestionsJSON, `"pembahasan": "2+2=4"`, `"pembahasan": "2+2=4", "gambar_tipe": "stock", "gambar_cari": "   "`, 1)
 	_, err := validateQuestions([]byte(bad), validCounts, 0)
 	assertErrContains(t, err, "gambar_cari")
+}
+
+func TestTruncateUTF8DoesNotSplitMultiByteRune(t *testing.T) {
+	// "materi ajar" repeated with an Arabic word ("بسم") right at the cut
+	// point — a naive s[:maxBytes] would slice through the middle of one of
+	// its multi-byte UTF-8 runes and produce invalid UTF-8.
+	s := strings.Repeat("a", 10) + "بسم" + strings.Repeat("b", 10)
+	for cut := 8; cut <= 14; cut++ {
+		got := truncateUTF8(s, cut)
+		if !utf8.ValidString(got) {
+			t.Errorf("truncateUTF8(s, %d) = %q, not valid UTF-8", cut, got)
+		}
+		if len(got) > cut {
+			t.Errorf("truncateUTF8(s, %d) = %q, len %d > %d", cut, got, len(got), cut)
+		}
+	}
+}
+
+func TestTruncateUTF8NoopWhenUnderLimit(t *testing.T) {
+	if got := truncateUTF8("pendek", 100); got != "pendek" {
+		t.Errorf("truncateUTF8 = %q, want unchanged", got)
+	}
 }
 
 func assertErrContains(t *testing.T, err error, substr string) {

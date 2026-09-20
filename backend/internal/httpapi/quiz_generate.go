@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"sync"
 
 	"banksoal/internal/gradeconfig"
 	"banksoal/internal/idgen"
@@ -17,6 +18,12 @@ import (
 )
 
 const imageCapPerPaket = 3
+
+// maxConcurrentPakets caps how many packages are generated at once.
+// jumlah_paket is at most 5, but each package is its own full LLM call
+// (heavier than a single grading batch), so firing all of them at once
+// still risks tripping the AI provider's rate limit.
+const maxConcurrentPakets = 3
 
 // maxMaterialImagesForPrompt caps how many material images are sent to the
 // LLM as multimodal input per generation call — keeps the request payload
@@ -204,38 +211,88 @@ func (h *Handlers) handleGenerateQuiz(w http.ResponseWriter, r *http.Request) {
 	}
 	materialText, materialImages := buildMaterialContext(materials)
 
+	// Packages are independent, so they're generated CONCURRENTLY (bounded by
+	// maxConcurrentPakets) — wall-clock time then tracks the slowest package
+	// instead of the sum of every one generated one after another. Each
+	// goroutine writes only to its own index, so no lock is needed for that
+	// part; genCtx is cancelled on the first internal (non-LLM) error so the
+	// rest stop early instead of doing wasted work whose result would be
+	// discarded anyway.
+	genCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	batchID := idgen.NewUUID()
-	var createdIDs []string
+	quizIDs := make([]string, body.JumlahPaket)
+	genErrs := make([]error, body.JumlahPaket)
+	var mu sync.Mutex
+	var internalErr error
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, maxConcurrentPakets)
 	for i := 0; i < body.JumlahPaket; i++ {
-		rawQuestions, err := h.LLM.GenerateQuiz(ctx, sub.Name, body.Grade, counts, materialText, materialImages)
-		if err != nil {
-			if len(createdIDs) == 0 {
-				writeError(w, http.StatusBadGateway, err.Error())
-				return
-			}
-			break // packages already made this call stay saved as pool
-		}
-		h.resolveImages(ctx, rawQuestions, materialImages)
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 
-		questions := make([]store.Question, len(rawQuestions))
-		for j, rq := range rawQuestions {
-			sq, err := rq.ToStoreQuestion()
+			rawQuestions, err := h.LLM.GenerateQuiz(genCtx, sub.Name, body.Grade, counts, materialText, materialImages)
 			if err != nil {
-				writeError(w, http.StatusInternalServerError, "Terjadi kesalahan pada server.")
+				genErrs[i] = err
 				return
 			}
-			questions[j] = sq
-		}
+			h.resolveImages(genCtx, rawQuestions, materialImages)
 
-		quiz, err := h.Store.CreateQuiz(ctx, store.QuizInput{
-			SubjectID: sub.ID, Grade: body.Grade, ExamTypeID: body.ExamTypeID,
-			Questions: questions, BatchID: batchID, DurasiMenit: durasi,
-		})
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "Terjadi kesalahan pada server.")
-			return
+			questions := make([]store.Question, len(rawQuestions))
+			for j, rq := range rawQuestions {
+				sq, err := rq.ToStoreQuestion()
+				if err != nil {
+					mu.Lock()
+					if internalErr == nil {
+						internalErr = err
+					}
+					mu.Unlock()
+					cancel()
+					return
+				}
+				questions[j] = sq
+			}
+
+			quiz, err := h.Store.CreateQuiz(genCtx, store.QuizInput{
+				SubjectID: sub.ID, Grade: body.Grade, ExamTypeID: body.ExamTypeID,
+				Questions: questions, BatchID: batchID, DurasiMenit: durasi,
+			})
+			if err != nil {
+				mu.Lock()
+				if internalErr == nil {
+					internalErr = err
+				}
+				mu.Unlock()
+				cancel()
+				return
+			}
+			quizIDs[i] = quiz.ID
+		}(i)
+	}
+	wg.Wait()
+
+	if internalErr != nil {
+		writeError(w, http.StatusInternalServerError, "Terjadi kesalahan pada server.")
+		return
+	}
+
+	var createdIDs []string
+	var firstGenErr error
+	for i, id := range quizIDs {
+		if id != "" {
+			createdIDs = append(createdIDs, id)
+		} else if genErrs[i] != nil && firstGenErr == nil {
+			firstGenErr = genErrs[i]
 		}
-		createdIDs = append(createdIDs, quiz.ID)
+	}
+	if len(createdIDs) == 0 {
+		writeError(w, http.StatusBadGateway, firstGenErr.Error())
+		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"banksoal/internal/store"
 )
@@ -47,6 +48,20 @@ func roundHalfEven(v float64) int {
 	}
 }
 
+// truncateUTF8 cuts s to at most maxBytes bytes without splitting a
+// multi-byte rune in half — material text can contain Arabic script or
+// other multi-byte characters, and a raw byte-slice cut can otherwise land
+// mid-rune and corrupt the trailing character.
+func truncateUTF8(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	for maxBytes > 0 && !utf8.RuneStart(s[maxBytes]) {
+		maxBytes--
+	}
+	return s[:maxBytes]
+}
+
 func buildPrompt(subject string, grade int, counts map[string]int, material string, imageCount int) string {
 	var countsParts []string
 	for _, qtype := range []string{"pilihan_ganda", "benar_salah", "isian", "deskripsi"} {
@@ -59,10 +74,7 @@ func buildPrompt(subject string, grade int, counts map[string]int, material stri
 
 	var materiText string
 	if material != "" {
-		trimmed := material
-		if len(trimmed) > 4000 {
-			trimmed = trimmed[:4000]
-		}
+		trimmed := truncateUTF8(material, 4000)
 		materiText = "Gunakan materi ajar berikut sebagai sumber utama soal:\n\n" + trimmed + "\n\n"
 	} else {
 		materiText = fmt.Sprintf("Tidak ada materi khusus. Gunakan kurikulum sekolah Indonesia umum untuk mata pelajaran %s kelas %d.\n\n", subject, grade)
@@ -82,7 +94,7 @@ Balas HANYA dengan JSON valid (tanpa teks lain) dengan format:
 {"questions": [
   {"tipe": "pilihan_ganda", "pertanyaan": "...", "opsi": ["...", "...", "...", "..."], "jawaban": 0, "pembahasan": "..."},
   {"tipe": "benar_salah", "pertanyaan": "...", "jawaban": "benar" atau "salah", "pembahasan": "..."},
-  {"tipe": "isian", "pertanyaan": "...", "jawaban": "jawaban singkat", "pembahasan": "...", "gambar_tipe": "stock", "gambar_cari": "..."}
+  {"tipe": "isian", "pertanyaan": "...", "jawaban": "jawaban singkat", "pembahasan": "...", "gambar_tipe": "stock", "gambar_cari": "..."},
   {"tipe": "deskripsi", "pertanyaan": "...", "jawaban": "uraian jawaban model berupa beberapa kalimat", "pembahasan": "..."}
 ]}
 
@@ -260,11 +272,18 @@ func intMapsEqual(a, b map[string]int) bool {
 	return true
 }
 
+// quizGenMaxAttempts bounds retries within one GenerateQuiz call — both on a
+// chat() failure (network error, or a transient status chat() itself already
+// gave up retrying) and on an invalid/incomplete JSON response. Mirrors
+// gradeBatch's retry policy in grading.go.
+const quizGenMaxAttempts = 3
+
 // GenerateQuiz asks the LLM for one quiz package's worth of questions,
-// retrying once with a JSON-repair follow-up message if validation fails.
-// Material images (already hosted at public URLs) are attached to the user
-// message as multimodal input, so the LLM can see diagrams/photos from the
-// source material rather than only their surrounding text, and may point a
+// retrying on a chat() failure and, with a JSON-repair follow-up message, on
+// a validation failure — up to quizGenMaxAttempts total. Material images
+// (already hosted at public URLs) are attached to the user message as
+// multimodal input, so the LLM can see diagrams/photos from the source
+// material rather than only their surrounding text, and may point a
 // question at one of them via gambar_tipe:"material"/gambar_index.
 func (c *Client) GenerateQuiz(ctx context.Context, subject string, grade int, counts map[string]int, material string, images []store.MaterialImage) ([]RawQuestion, error) {
 	prompt := buildPrompt(subject, grade, counts, material, len(images))
@@ -292,10 +311,14 @@ func (c *Client) GenerateQuiz(ctx context.Context, subject string, grade int, co
 	}
 
 	var lastErr error
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := 0; attempt < quizGenMaxAttempts; attempt++ {
 		content, err := c.chat(ctx, messages)
 		if err != nil {
-			return nil, err
+			// Retry too on a chat() failure, not just an invalid response —
+			// a single failed request shouldn't cost the whole package its
+			// generation (see gradeBatch in grading.go for the same policy).
+			lastErr = err
+			continue
 		}
 		questions, verr := validateQuestions([]byte(content), counts, len(images))
 		if verr == nil {
