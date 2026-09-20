@@ -91,6 +91,8 @@ export default function Quiz() {
 
   const answersRef = useRef(answers);
   answersRef.current = answers;
+  const isianInputRef = useRef<HTMLInputElement>(null);
+  const deskripsiInputRef = useRef<HTMLTextAreaElement>(null);
   const inFlightRef = useRef(false);
   const settledRef = useRef(false);
   const submitAttemptRef = useRef(0);
@@ -348,6 +350,23 @@ export default function Quiz() {
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
   }, [expiresAt]);
+
+  // Soal isian/uraian: kursor langsung siap mengetik begitu pindah soal,
+  // posisinya di akhir teks supaya jawaban yang sudah ada tidak tertimpa.
+  const currentTipe = questions ? questions[current]?.tipe : undefined;
+  useEffect(() => {
+    if (phase !== "exam" || busy) return;
+    const el =
+      currentTipe === "isian"
+        ? isianInputRef.current
+        : currentTipe === "deskripsi"
+          ? deskripsiInputRef.current
+          : null;
+    if (!el) return;
+    el.focus();
+    const len = el.value.length;
+    el.setSelectionRange(len, len);
+  }, [current, phase, currentTipe, busy]);
 
   const hasProgress = Object.values(answers).some(
     (v) => v !== undefined && v !== null && v !== ""
@@ -688,6 +707,7 @@ export default function Quiz() {
                 )}
                 {q.tipe === "isian" && (
                   <Input
+                    ref={isianInputRef}
                     placeholder="Tulis jawaban singkat di sini"
                     value={
                       typeof answers[String(current)] === "string"
@@ -702,6 +722,7 @@ export default function Quiz() {
                 )}
                 {q.tipe === "deskripsi" && (
                   <Textarea
+                    ref={deskripsiInputRef}
                     placeholder="Tulis jawaban uraianmu di sini"
                     rows={6}
                     value={
