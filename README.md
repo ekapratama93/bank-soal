@@ -16,7 +16,7 @@ Aplikasi pembuat soal latihan sekolah dengan bantuan AI (OpenRouter). Siswa memi
 ## Struktur
 
 ```
-backend/   FastAPI (Python) — API + integrasi OpenRouter + Supabase
+backend/   Go — API + integrasi OpenRouter + Supabase (Postgres langsung via pgx, Auth/Storage via REST)
 frontend/  React (Vite + TypeScript)
 schema.sql Skema database Supabase (backend/schema.sql)
 ```
@@ -50,10 +50,10 @@ schema.sql Skema database Supabase (backend/schema.sql)
 
 ## 2. Setup Backend
 
+Butuh Go 1.23+.
+
 ```bash
 cd backend
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
 cp .env.example .env
 ```
 
@@ -63,14 +63,15 @@ Isi `.env`:
 | --- | --- |
 | `OPENROUTER_API_KEY` | Kunci API dari https://openrouter.ai/keys |
 | `OPENROUTER_MODEL` | Model (default `z-ai/glm-4.5-air:free`, gratis) |
-| `SUPABASE_URL` | URL proyek Supabase |
+| `SUPABASE_URL` | URL proyek Supabase (dipakai untuk Auth + Storage REST) |
 | `SUPABASE_SERVICE_KEY` | service_role key (server-side saja) |
+| `DATABASE_URL` | Connection string Postgres Supabase (Project Settings → Database → Connection string, pakai varian "Connection pooling") — backend Go query tabel langsung lewat `pgx`, bukan lewat PostgREST |
 | `FRONTEND_ORIGIN` | Origin frontend untuk CORS (dev) |
 
 Jalankan:
 
 ```bash
-uvicorn app.main:app --reload --port 8000
+go run ./cmd/server
 ```
 
 ## 3. Setup Frontend
@@ -87,16 +88,15 @@ Terbuka di http://localhost:5173. Vite mem-proxy `/api` ke backend di port 8000.
 
 - **Siswa** (tanpa login): Beranda → pilih mapel + kelas + tipe ujian → "Ambil Soal" (hanya mengambil paket yang sudah dibuat admin) → kerjakan → "Kumpulkan" (atau otomatis saat waktu habis) → lihat nilai + pembahasan. Setiap "Ambil Soal" berikutnya memberi paket berbeda. Riwayat tersimpan di perangkat lewat halaman "Riwayat".
 - **Admin**: halaman "Admin" → login dengan akun ber-role `admin` → kelola **mata pelajaran** (tambah/hapus), **tipe ujian** (nama + jumlah soal/durasi opsional + komposisi tipe soal opsional, mis. 10 pilihan ganda + 5 isian + 5 uraian; jika komposisi diisi, total soal dihitung darinya), tambah/hapus **materi** (ketik manual atau unggah file PDF/TXT, tentukan jumlah paket 1–5), **Generate Paket Soal** (membuat batch paket via AI), **Reset Pool** per kombinasi, dan kelola **kuis/paket soal** yang sudah dibuat di tab "Kuis" (daftar + filter, lihat soal beserta kunci jawaban & pembahasan, edit soal untuk memperbaiki hasil AI, hapus paket individual).
-- Jumlah soal/waktu per kelas: kelas 1–2 → 20 soal/60 menit, 3–4 → 25/60, 5–6 → 30/60, 7+ → 30/90 (`backend/app/grade_config.py`).
+- Jumlah soal/waktu per kelas: kelas 1–2 → 20 soal/60 menit, 3–4 → 25/60, 5–6 → 30/60, 7+ → 30/90 (`backend/internal/gradeconfig/gradeconfig.go`).
 
 ## Tests
 
-Backend (menggunakan fake Supabase + stub LLM, tidak butuh API key):
+Backend (unit test murni tidak butuh apa pun; test integrasi DB butuh Docker — memakai `testcontainers-go` untuk menjalankan Postgres asli + `schema.sql`, bukan fake client):
 
 ```bash
 cd backend
-pip install -r requirements-dev.txt
-python -m pytest
+go test ./...
 ```
 
 Frontend:
@@ -158,6 +158,7 @@ Karena root directory sudah diatur di file tersebut, Railway tidak mencoba mem-b
    railway variable set OPENROUTER_API_KEY=xxx -s backend
    railway variable set SUPABASE_URL=https://xxxxx.supabase.co -s backend
    railway variable set SUPABASE_SERVICE_KEY=xxx -s backend
+   railway variable set DATABASE_URL=postgresql://postgres.xxxxx:xxx@aws-0-region.pooler.supabase.com:6543/postgres -s backend
    ```
 
    atau lewat dashboard → service **backend** → tab Variables.
@@ -179,7 +180,7 @@ Setelah jalan, frontend mem-proxy `/api` ke backend lewat private networking (`B
 - Jawaban yang sedang dikerjakan disimpan sebagai draf di perangkat (localStorage) dan dipulihkan saat halaman dibuka ulang. Timer memakai jam server (header `Date`), jadi jam perangkat yang meleset tidak memengaruhi sisa waktu.
 - Menghapus tipe ujian atau mata pelajaran ditolak bila masih dipakai materi atau kuis; pindahkan/hapus materinya atau Reset Pool dulu.
 - Menghapus paket soal individual (Panel Admin → tab Kuis) juga menghapus riwayat attempt paket tersebut — konfirmasi ditampilkan lebih dulu untuk paket yang sudah pernah dibuka siswa.
-- Login admin dibatasi 5 percobaan per 15 menit per alamat email (server, `backend/app/routers/auth.py`) — mencegah tebak-tebak password bertubi-tubi. Batas ini hidup selama proses backend berjalan (reset saat restart).
-- Soal **isian** dinilai lokal lewat pencocokan string (toleransi kecil pada salah ketik/ejaan, `backend/app/text_match.py`), bukan lewat AI — tidak ada nilai parsial untuk isian (benar/salah). Hanya soal **uraian/deskripsi** yang dikoreksi AI, karena itu yang sungguh butuh penilaian kelengkapan & ketepatan isi. Perubahan ini mempercepat pengumpulan secara signifikan untuk paket yang komposisinya banyak isian.
-- Kalau satu paket punya banyak soal uraian/deskripsi (komposisi khusus dari admin — komposisi otomatis tidak pernah menyertakan deskripsi), soal-soal itu dinilai AI dalam beberapa batch **paralel** (maks 4 soal per panggilan, `backend/app/llm.py` `GRADE_BATCH_SIZE`), bukan satu panggilan besar berurutan — waktu tunggu mendekati satu batch terbesar, bukan jumlah semua soal digabung.
+- Login admin dibatasi 5 percobaan per 15 menit per alamat email (server, `backend/internal/httpapi/ratelimit.go`) — mencegah tebak-tebak password bertubi-tubi. Batas ini hidup selama proses backend berjalan (reset saat restart).
+- Soal **isian** dinilai lokal lewat pencocokan string (toleransi kecil pada salah ketik/ejaan, `backend/internal/textmatch/textmatch.go`), bukan lewat AI — tidak ada nilai parsial untuk isian (benar/salah). Hanya soal **uraian/deskripsi** yang dikoreksi AI, karena itu yang sungguh butuh penilaian kelengkapan & ketepatan isi. Perubahan ini mempercepat pengumpulan secara signifikan untuk paket yang komposisinya banyak isian.
+- Kalau satu paket punya banyak soal uraian/deskripsi (komposisi khusus dari admin — komposisi otomatis tidak pernah menyertakan deskripsi), soal-soal itu dinilai AI dalam beberapa batch **paralel** (goroutine per batch, maks 4 soal per panggilan, `backend/internal/llm/grading.go` `gradeBatchSize`), bukan satu panggilan besar berurutan — waktu tunggu mendekati satu batch terbesar, bukan jumlah semua soal digabung.
 - Jawaban isian berupa **angka** dibandingkan sebagai nilai, bukan string — notasi ribuan/desimal Indonesia ("1.000", "0,25") vs internasional ("1000", "0.25"), serta pecahan ("1/2" = "0.5" = "0,5"), semuanya dianggap sama asal nilainya sama.

@@ -63,6 +63,11 @@ pip-delete-this-directory.txt
 *.pem
 *.key
 
+# --- Go (backend) ---
+backend/server
+backend/bin/
+*.test
+
 # --- Node (frontend) ---
 node_modules/
 dist/
@@ -82,6 +87,8 @@ uploads/
 Thumbs.db
 desktop.ini
 .idea/
+.kilo/
+.claude/
 .vscode/
 *.swp
 *.swo

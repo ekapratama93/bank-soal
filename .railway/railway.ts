@@ -13,6 +13,7 @@ export default defineRailway(() => {
       OPENROUTER_API_KEY: preserve(),
       SUPABASE_URL: preserve(),
       SUPABASE_SERVICE_KEY: preserve(),
+      DATABASE_URL: preserve(),
     },
   });
 
