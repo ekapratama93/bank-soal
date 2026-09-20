@@ -208,10 +208,13 @@ async function request<T>(
   noteServerDateHeader(res.headers.get("date"), sentAt, Date.now());
   if (res.status === 204) return undefined as T;
   let body: unknown = null;
+  let parsed = false;
   try {
     body = await res.json();
+    parsed = true;
   } catch {
-    // respons tanpa isi
+    // Respons tanpa isi — atau BUKAN JSON (mis. SPA fallback index.html saat
+    // proxy /api tidak jalan). Jangan diam-diam dianggap data valid.
   }
   if (!res.ok) {
     const detail =
@@ -219,6 +222,12 @@ async function request<T>(
         ? String((body as { detail: unknown }).detail)
         : "Terjadi kesalahan. Coba lagi nanti.";
     throw new ApiError(detail, res.status);
+  }
+  if (!parsed) {
+    // 200 dengan body bukan-JSON hampir pasti berarti permintaan tidak
+    // sampai ke backend (mis. dijawab halaman statis). Lempar sebagai galat
+    // supaya halaman menampilkan peringatan, bukan state null yang meledak.
+    throw new ApiError("Server mengirim respons yang tidak valid.", res.status);
   }
   return body as T;
 }

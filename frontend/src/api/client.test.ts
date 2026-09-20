@@ -5,6 +5,7 @@ import {
   generateBatch,
   getAttempts,
   getQuiz,
+  getSubjects,
   renameSubject,
   submitQuiz,
   updateExamType,
@@ -47,6 +48,23 @@ describe("pembungkus fetch", () => {
     const err = await getQuiz("q1").catch((e) => e);
     expect(err.status).toBe(404);
     expect(err.message).toBe("Kuis tidak ditemukan");
+  });
+
+  it("menolak respons 200 yang bukan JSON (mis. SPA fallback saat proxy /api hilang)", async () => {
+    // Sebelum diperketat, body non-JSON diam-diam dianggap null dan meledak
+    // di halaman ("can't access property length, S is null").
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("<!doctype html><html></html>", {
+          status: 200,
+          headers: { "Content-Type": "text/html" },
+        })
+      )
+    );
+    const err = await getSubjects().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.message).toBe("Server mengirim respons yang tidak valid.");
   });
 
   it("membatalkan permintaan yang menggantung dan menandainya bisa dicoba ulang", async () => {
