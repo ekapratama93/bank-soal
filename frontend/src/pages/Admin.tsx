@@ -1555,7 +1555,23 @@ export default function Admin() {
                         <div>
                           <strong className="font-bold">{m.title}</strong>
                           {m.file_name && (
-                            <span className="text-muted-foreground"> ({m.file_name})</span>
+                            <span className="text-muted-foreground">
+                              {" ("}
+                              {m.file_url ? (
+                                <a
+                                  href={m.file_url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="underline"
+                                >
+                                  {m.file_name}
+                                </a>
+                              ) : (
+                                m.file_name
+                              )}
+                              {m.images.length > 0 && `, ${m.images.length} gambar`}
+                              {")"}
+                            </span>
                           )}
                           <div className="mt-1.5 flex flex-wrap gap-1.5">
                             <Badge variant="secondary">{m.subject}</Badge>

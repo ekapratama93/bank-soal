@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -142,7 +143,8 @@ func (h *Handlers) handleUploadMaterial(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var parts []string
-	var fileName *string
+	var fileName, fileURL *string
+	var materialImages []store.MaterialImage
 	if file, header, err := r.FormFile("file"); err == nil {
 		defer file.Close()
 		data := make([]byte, fileextract.MaxFileBytes+1)
@@ -152,7 +154,7 @@ func (h *Handlers) handleUploadMaterial(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusUnprocessableEntity, "Ukuran file melebihi 2 MB.")
 			return
 		}
-		text, err := fileextract.Extract(header.Filename, data)
+		text, images, err := fileextract.Extract(header.Filename, data)
 		if err != nil {
 			if strings.TrimSpace(content) == "" {
 				writeError(w, http.StatusUnprocessableEntity, err.Error())
@@ -162,6 +164,13 @@ func (h *Handlers) handleUploadMaterial(w http.ResponseWriter, r *http.Request) 
 			parts = append(parts, text)
 			name := header.Filename
 			fileName = &name
+
+			if url, err := h.Auth.UploadMaterialFile(ctx, data, fileExt(header.Filename), materialContentType(header.Filename)); err != nil {
+				slog.Warn("Gagal mengunggah file materi asli", "err", err)
+			} else {
+				fileURL = &url
+			}
+			materialImages = h.uploadMaterialImages(ctx, images)
 		}
 	}
 	if strings.TrimSpace(content) != "" {
@@ -187,7 +196,8 @@ func (h *Handlers) handleUploadMaterial(w http.ResponseWriter, r *http.Request) 
 
 	material, err := h.Store.CreateMaterial(ctx, store.MaterialInput{
 		SubjectID: sub.ID, Grade: grade, ExamTypeID: examTypeID,
-		Title: finalTitle, Content: fullContent, FileName: fileName, CreatedBy: admin.Email,
+		Title: finalTitle, Content: fullContent, FileName: fileName, FileURL: fileURL,
+		Images: materialImages, CreatedBy: admin.Email,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Terjadi kesalahan pada server.")
@@ -199,6 +209,43 @@ func (h *Handlers) handleUploadMaterial(w http.ResponseWriter, r *http.Request) 
 	}
 	material.Subject = sub.Name
 	writeJSON(w, http.StatusCreated, material)
+}
+
+// uploadMaterialImages uploads every image extracted from a material's file
+// to Supabase Storage — a failure on any single image must not fail the
+// whole upload, it just ends up missing from the material's image list.
+func (h *Handlers) uploadMaterialImages(ctx context.Context, images []fileextract.Image) []store.MaterialImage {
+	out := make([]store.MaterialImage, 0, len(images))
+	for _, img := range images {
+		url, err := h.Auth.UploadImageBytes(ctx, img.Data, img.ContentType)
+		if err != nil {
+			slog.Warn("Gagal mengunggah gambar materi", "err", err)
+			continue
+		}
+		out = append(out, store.MaterialImage{URL: url, Name: img.Name})
+	}
+	return out
+}
+
+func fileExt(filename string) string {
+	idx := strings.LastIndex(filename, ".")
+	if idx < 0 {
+		return ""
+	}
+	return strings.ToLower(filename[idx+1:])
+}
+
+var materialContentTypeByExt = map[string]string{
+	"docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+	"pdf":  "application/pdf",
+	"txt":  "text/plain",
+}
+
+func materialContentType(filename string) string {
+	if ct, ok := materialContentTypeByExt[fileExt(filename)]; ok {
+		return ct
+	}
+	return "application/octet-stream"
 }
 
 func parseGrade(s string) (int, bool) {

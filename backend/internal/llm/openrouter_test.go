@@ -121,7 +121,7 @@ func TestGenerateQuizRetriesOnBadJSONThenSucceeds(t *testing.T) {
 		}
 		w.Write(chatOKResponse(validQuestionsJSON))
 	})
-	qs, err := c.GenerateQuiz(context.Background(), "IPA", 5, validCounts, "")
+	qs, err := c.GenerateQuiz(context.Background(), "IPA", 5, validCounts, "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestGenerateQuizFailsAfterTwoAttempts(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		w.Write(chatOKResponse("bukan JSON"))
 	})
-	if _, err := c.GenerateQuiz(context.Background(), "IPA", 5, validCounts, ""); err == nil {
+	if _, err := c.GenerateQuiz(context.Background(), "IPA", 5, validCounts, "", nil); err == nil {
 		t.Fatal("expected an error")
 	}
 }

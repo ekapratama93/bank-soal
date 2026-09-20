@@ -2,20 +2,26 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"github.com/jackc/pgx/v5"
 )
 
-const materialColumns = `id, subject_id, grade, exam_type_id, title, content, file_name, created_by, created_at`
+const materialColumns = `id, subject_id, grade, exam_type_id, title, content, file_name, file_url, images, created_by, created_at`
 
 func scanMaterial(row pgx.Row) (*Material, error) {
 	var m Material
-	err := row.Scan(&m.ID, &m.SubjectID, &m.Grade, &m.ExamTypeID, &m.Title, &m.Content, &m.FileName, &m.CreatedBy, &m.CreatedAt)
+	var imagesRaw []byte
+	err := row.Scan(&m.ID, &m.SubjectID, &m.Grade, &m.ExamTypeID, &m.Title, &m.Content, &m.FileName,
+		&m.FileURL, &imagesRaw, &m.CreatedBy, &m.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(imagesRaw, &m.Images); err != nil {
 		return nil, err
 	}
 	return &m, nil
@@ -29,7 +35,7 @@ type MaterialFilter struct {
 func (s *Store) ListMaterials(ctx context.Context, f MaterialFilter) ([]Material, error) {
 	sqlq := `
 		select m.id, m.subject_id, m.grade, m.exam_type_id, m.title, m.content, m.file_name,
-		       m.created_by, m.created_at, et.name
+		       m.file_url, m.images, m.created_by, m.created_at, et.name
 		from materials m
 		left join exam_types et on et.id = m.exam_type_id
 		where ($1::uuid is null or m.subject_id = $1)
@@ -43,9 +49,13 @@ func (s *Store) ListMaterials(ctx context.Context, f MaterialFilter) ([]Material
 	out := []Material{} // never nil: marshals as [] rather than null when empty
 	for rows.Next() {
 		var m Material
+		var imagesRaw []byte
 		var examTypeName *string
 		if err := rows.Scan(&m.ID, &m.SubjectID, &m.Grade, &m.ExamTypeID, &m.Title, &m.Content,
-			&m.FileName, &m.CreatedBy, &m.CreatedAt, &examTypeName); err != nil {
+			&m.FileName, &m.FileURL, &imagesRaw, &m.CreatedBy, &m.CreatedAt, &examTypeName); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(imagesRaw, &m.Images); err != nil {
 			return nil, err
 		}
 		if examTypeName != nil {
@@ -64,18 +74,22 @@ func (s *Store) GetMaterial(ctx context.Context, id string) (*Material, error) {
 func (s *Store) GetMaterialWithExamType(ctx context.Context, id string) (*Material, error) {
 	sqlq := `
 		select m.id, m.subject_id, m.grade, m.exam_type_id, m.title, m.content, m.file_name,
-		       m.created_by, m.created_at, et.name
+		       m.file_url, m.images, m.created_by, m.created_at, et.name
 		from materials m
 		left join exam_types et on et.id = m.exam_type_id
 		where m.id = $1`
 	var m Material
+	var imagesRaw []byte
 	var examTypeName *string
 	err := s.Pool.QueryRow(ctx, sqlq, id).Scan(&m.ID, &m.SubjectID, &m.Grade, &m.ExamTypeID, &m.Title,
-		&m.Content, &m.FileName, &m.CreatedBy, &m.CreatedAt, &examTypeName)
+		&m.Content, &m.FileName, &m.FileURL, &imagesRaw, &m.CreatedBy, &m.CreatedAt, &examTypeName)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(imagesRaw, &m.Images); err != nil {
 		return nil, err
 	}
 	if examTypeName != nil {
@@ -91,15 +105,24 @@ type MaterialInput struct {
 	Title      string
 	Content    string
 	FileName   *string
+	FileURL    *string
+	Images     []MaterialImage
 	CreatedBy  string
 }
 
 func (s *Store) CreateMaterial(ctx context.Context, in MaterialInput) (*Material, error) {
+	if in.Images == nil {
+		in.Images = []MaterialImage{}
+	}
+	imagesJSON, err := json.Marshal(in.Images)
+	if err != nil {
+		return nil, err
+	}
 	row := s.Pool.QueryRow(ctx,
-		`insert into materials (subject_id, grade, exam_type_id, title, content, file_name, created_by)
-		 values ($1, $2, $3, $4, $5, $6, $7)
+		`insert into materials (subject_id, grade, exam_type_id, title, content, file_name, file_url, images, created_by)
+		 values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
 		 returning `+materialColumns,
-		in.SubjectID, in.Grade, in.ExamTypeID, in.Title, in.Content, in.FileName, in.CreatedBy,
+		in.SubjectID, in.Grade, in.ExamTypeID, in.Title, in.Content, in.FileName, in.FileURL, string(imagesJSON), in.CreatedBy,
 	)
 	return scanMaterial(row)
 }
@@ -154,7 +177,7 @@ func (s *Store) DeleteMaterial(ctx context.Context, id string) error {
 // subject/grade/exam-type combo, used as AI generation context.
 func (s *Store) MaterialsForGeneration(ctx context.Context, subjectID string, grade int, examTypeID string) ([]Material, error) {
 	rows, err := s.Pool.Query(ctx,
-		`select title, content from materials where subject_id = $1 and grade = $2 and exam_type_id = $3`,
+		`select title, content, images from materials where subject_id = $1 and grade = $2 and exam_type_id = $3`,
 		subjectID, grade, examTypeID,
 	)
 	if err != nil {
@@ -164,7 +187,11 @@ func (s *Store) MaterialsForGeneration(ctx context.Context, subjectID string, gr
 	out := []Material{} // never nil: marshals as [] rather than null when empty
 	for rows.Next() {
 		var m Material
-		if err := rows.Scan(&m.Title, &m.Content); err != nil {
+		var imagesRaw []byte
+		if err := rows.Scan(&m.Title, &m.Content, &imagesRaw); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(imagesRaw, &m.Images); err != nil {
 			return nil, err
 		}
 		out = append(out, m)

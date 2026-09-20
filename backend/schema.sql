@@ -240,6 +240,12 @@ begin
 end $$;
 create index if not exists idx_materials_exam_type on public.materials (exam_type_id);
 
+-- URL file asli yang diunggah (disimpan di Supabase Storage bucket "materials"),
+-- dan gambar-gambar yang diekstrak dari dalamnya (docx: word/media/*, pdf: gambar
+-- tertanam) — dipakai sebagai kandidat gambar_tipe:"material" saat generate soal.
+alter table public.materials add column if not exists file_url text;
+alter table public.materials add column if not exists images jsonb not null default '[]'::jsonb;
+
 -- Klien backend memakai service_role; pastikan punya akses penuh ke semua tabel.
 -- (Beberapa proyek Supabase baru tidak memberi grant ini otomatis.)
 grant select, insert, update, delete on all tables in schema public to service_role;

@@ -2,8 +2,11 @@ package httpapi
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
+	"strconv"
 
 	"banksoal/internal/gradeconfig"
 	"banksoal/internal/idgen"
@@ -15,11 +18,63 @@ import (
 
 const imageCapPerPaket = 3
 
+// maxMaterialImagesForPrompt caps how many material images are sent to the
+// LLM as multimodal input per generation call — keeps the request payload
+// and per-call cost bounded even when several materials each contributed
+// their own handful of extracted images.
+const maxMaterialImagesForPrompt = 10
+
+// materialImageMarkerRe matches the "[Gambar N]" position markers
+// fileextract leaves in a material's content, where N is 1-based and local
+// to that single material's own Images list (see docx.go/pdf.go).
+var materialImageMarkerRe = regexp.MustCompile(`\s?\[Gambar (\d+)\]`)
+
+// buildMaterialContext concatenates every material's title+content into one
+// prompt string and flattens their images into one list, capped at
+// maxMaterialImagesForPrompt — the same pairing GenerateQuiz's gambar_index
+// numbering and resolveImages both key off. Each material's own "[Gambar N]"
+// markers are local to that material, so they're rewritten here into the
+// global index its image ends up at in the flattened list; a marker whose
+// image didn't make the cut is dropped, since there's no longer an attached
+// image left for it to point to.
+func buildMaterialContext(materials []store.Material) (string, []store.MaterialImage) {
+	var images []store.MaterialImage
+	text := ""
+	for i, m := range materials {
+		offset := len(images)
+		included := len(m.Images)
+		if remaining := maxMaterialImagesForPrompt - offset; included > remaining {
+			included = remaining
+		}
+		if included > 0 {
+			images = append(images, m.Images[:included]...)
+		}
+
+		if i > 0 {
+			text += "\n\n"
+		}
+		text += m.Title + ":\n" + renumberMaterialImageMarkers(m.Content, offset, included)
+	}
+	return text, images
+}
+
+func renumberMaterialImageMarkers(content string, offset, included int) string {
+	return materialImageMarkerRe.ReplaceAllStringFunc(content, func(m string) string {
+		local, err := strconv.Atoi(materialImageMarkerRe.FindStringSubmatch(m)[1])
+		if err != nil || local < 1 || local > included {
+			return ""
+		}
+		return fmt.Sprintf(" [Gambar %d]", offset+local)
+	})
+}
+
 // resolveImages turns gambar_tipe/gambar_prompt/gambar_cari markers from
 // the LLM into a real "gambar" URL, up to imageCapPerPaket per package. A
 // failure on any single question must not fail the whole batch — that
-// question just ends up with no image.
-func (h *Handlers) resolveImages(ctx context.Context, questions []llm.RawQuestion) {
+// question just ends up with no image. materialImages is the same list
+// offered to the LLM as multimodal input (see collectMaterialImages), so a
+// gambar_tipe:"material" question's gambar_index resolves against it.
+func (h *Handlers) resolveImages(ctx context.Context, questions []llm.RawQuestion, materialImages []store.MaterialImage) {
 	resolved := 0
 	for i := range questions {
 		q := &questions[i]
@@ -28,6 +83,13 @@ func (h *Handlers) resolveImages(ctx context.Context, questions []llm.RawQuestio
 			continue
 		}
 		switch tipe {
+		case "material":
+			idx := q.GambarIndex - 1
+			if idx < 0 || idx >= len(materialImages) {
+				continue
+			}
+			q.Gambar = materialImages[idx].URL
+			resolved++
 		case "generated":
 			if q.GambarPrompt == "" {
 				continue
@@ -140,18 +202,12 @@ func (h *Handlers) handleGenerateQuiz(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "Terjadi kesalahan pada server.")
 		return
 	}
-	materialText := ""
-	for i, m := range materials {
-		if i > 0 {
-			materialText += "\n\n"
-		}
-		materialText += m.Title + ":\n" + m.Content
-	}
+	materialText, materialImages := buildMaterialContext(materials)
 
 	batchID := idgen.NewUUID()
 	var createdIDs []string
 	for i := 0; i < body.JumlahPaket; i++ {
-		rawQuestions, err := h.LLM.GenerateQuiz(ctx, sub.Name, body.Grade, counts, materialText)
+		rawQuestions, err := h.LLM.GenerateQuiz(ctx, sub.Name, body.Grade, counts, materialText, materialImages)
 		if err != nil {
 			if len(createdIDs) == 0 {
 				writeError(w, http.StatusBadGateway, err.Error())
@@ -159,7 +215,7 @@ func (h *Handlers) handleGenerateQuiz(w http.ResponseWriter, r *http.Request) {
 			}
 			break // packages already made this call stay saved as pool
 		}
-		h.resolveImages(ctx, rawQuestions)
+		h.resolveImages(ctx, rawQuestions, materialImages)
 
 		questions := make([]store.Question, len(rawQuestions))
 		for j, rq := range rawQuestions {

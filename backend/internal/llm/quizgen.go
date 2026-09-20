@@ -47,7 +47,7 @@ func roundHalfEven(v float64) int {
 	}
 }
 
-func buildPrompt(subject string, grade int, counts map[string]int, material string) string {
+func buildPrompt(subject string, grade int, counts map[string]int, material string, imageCount int) string {
 	var countsParts []string
 	for _, qtype := range []string{"pilihan_ganda", "benar_salah", "isian", "deskripsi"} {
 		count := counts[qtype]
@@ -75,7 +75,7 @@ func buildPrompt(subject string, grade int, counts map[string]int, material stri
 Jika soal memuat rumus, persamaan, pecahan, pangkat, akar, atau notasi matematika lain, tulis menggunakan LaTeX: gunakan $...$ untuk notasi sebaris (contoh: $x^2 + 1$) dan $$...$$ untuk persamaan berdiri sendiri (contoh: $$\frac{a}{b} = c$$). Ini boleh muncul di pertanyaan, opsi, maupun pembahasan. Selain notasi matematika ini, jangan gunakan format markdown lain (tanpa bold, tanpa list, tanpa heading) — teks biasa saja.
 
 Untuk SEBAGIAN KECIL soal saja (jangan berlebihan) di mana gambar benar-benar diperlukan agar soal bisa dipahami/dijawab (mis. diagram geometri, peta, grafik, atau mengenali objek/hewan/tumbuhan/tempat nyata), tambahkan dua field berikut pada objek soal itu:
-- "gambar_tipe": "generated" jika gambar berupa ilustrasi/diagram yang perlu dibuat (sertakan juga "gambar_prompt": deskripsi singkat gambar yang harus dibuat), atau "gambar_tipe": "stock" jika yang dibutuhkan adalah foto benda/tempat/makhluk nyata (sertakan juga "gambar_cari": kata kunci pencarian foto singkat dalam Bahasa Inggris).
+- "gambar_tipe": "generated" jika gambar berupa ilustrasi/diagram yang perlu dibuat (sertakan juga "gambar_prompt": deskripsi singkat gambar yang harus dibuat), atau "gambar_tipe": "stock" jika yang dibutuhkan adalah foto benda/tempat/makhluk nyata (sertakan juga "gambar_cari": kata kunci pencarian foto singkat dalam Bahasa Inggris).%s
 Soal lain yang tidak butuh gambar TIDAK PERLU menyertakan field ini sama sekali.
 
 Balas HANYA dengan JSON valid (tanpa teks lain) dengan format:
@@ -86,7 +86,18 @@ Balas HANYA dengan JSON valid (tanpa teks lain) dengan format:
   {"tipe": "deskripsi", "pertanyaan": "...", "jawaban": "uraian jawaban model berupa beberapa kalimat", "pembahasan": "..."}
 ]}
 
-Untuk pilihan_ganda, jawaban adalah indeks opsi yang benar (0-3). Untuk deskripsi, jawaban adalah jawaban model berupa uraian lengkap (beberapa kalimat) yang memuat seluruh poin penting yang diharapkan dari siswa. Pembahasan harus menjelaskan mengapa jawaban tersebut benar.`, subject, grade, countsText, materiText)
+Untuk pilihan_ganda, jawaban adalah indeks opsi yang benar (0-3). Untuk deskripsi, jawaban adalah jawaban model berupa uraian lengkap (beberapa kalimat) yang memuat seluruh poin penting yang diharapkan dari siswa. Pembahasan harus menjelaskan mengapa jawaban tersebut benar.`, subject, grade, countsText, materiText, materialImageNote(imageCount))
+}
+
+// materialImageNote extends the gambar_tipe instructions with a third
+// option when material images were attached to this prompt as multimodal
+// input (see GenerateQuiz) — the LLM can point a question at one of the
+// images it was actually shown instead of only generating/searching one.
+func materialImageNote(imageCount int) string {
+	if imageCount == 0 {
+		return ""
+	}
+	return fmt.Sprintf(` Anda juga diberikan %d gambar dari materi ajar (urut sesuai kemunculannya). Jika salah satu gambar tersebut relevan dan cukup untuk soal (mis. diagram/peta/foto yang sama persis dibutuhkan), gunakan "gambar_tipe": "material" dan sertakan "gambar_index": nomor urut gambar itu (1 sampai %d) alih-alih membuat atau mencari gambar baru.`, imageCount, imageCount)
 }
 
 func hasBalancedMathDelimiters(text string) bool {
@@ -118,6 +129,7 @@ type RawQuestion struct {
 	GambarTipe   string          `json:"gambar_tipe,omitempty"`
 	GambarPrompt string          `json:"gambar_prompt,omitempty"`
 	GambarCari   string          `json:"gambar_cari,omitempty"`
+	GambarIndex  int             `json:"gambar_index,omitempty"`
 	Gambar       string          `json:"-"`
 }
 
@@ -151,7 +163,7 @@ type questionsPayload struct {
 	Questions []RawQuestion `json:"questions"`
 }
 
-func validateQuestions(raw []byte, counts map[string]int) ([]RawQuestion, error) {
+func validateQuestions(raw []byte, counts map[string]int, imageCount int) ([]RawQuestion, error) {
 	var payload questionsPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return nil, fmt.Errorf("JSON tidak berisi daftar questions")
@@ -219,7 +231,7 @@ func validateQuestions(raw []byte, counts map[string]int) ([]RawQuestion, error)
 		}
 
 		if q.GambarTipe != "" {
-			if q.GambarTipe != "generated" && q.GambarTipe != "stock" {
+			if q.GambarTipe != "generated" && q.GambarTipe != "stock" && q.GambarTipe != "material" {
 				return nil, fmt.Errorf("soal %d: gambar_tipe tidak valid: %s", i, q.GambarTipe)
 			}
 			if q.GambarTipe == "generated" && strings.TrimSpace(q.GambarPrompt) == "" {
@@ -227,6 +239,9 @@ func validateQuestions(raw []byte, counts map[string]int) ([]RawQuestion, error)
 			}
 			if q.GambarTipe == "stock" && strings.TrimSpace(q.GambarCari) == "" {
 				return nil, fmt.Errorf("soal %d: gambar_cari kosong", i)
+			}
+			if q.GambarTipe == "material" && (q.GambarIndex < 1 || q.GambarIndex > imageCount) {
+				return nil, fmt.Errorf("soal %d: gambar_index di luar jangkauan (1-%d)", i, imageCount)
 			}
 		}
 	}
@@ -247,17 +262,33 @@ func intMapsEqual(a, b map[string]int) bool {
 
 // GenerateQuiz asks the LLM for one quiz package's worth of questions,
 // retrying once with a JSON-repair follow-up message if validation fails.
-func (c *Client) GenerateQuiz(ctx context.Context, subject string, grade int, counts map[string]int, material string) ([]RawQuestion, error) {
-	prompt := buildPrompt(subject, grade, counts, material)
+// Material images (already hosted at public URLs) are attached to the user
+// message as multimodal input, so the LLM can see diagrams/photos from the
+// source material rather than only their surrounding text, and may point a
+// question at one of them via gambar_tipe:"material"/gambar_index.
+func (c *Client) GenerateQuiz(ctx context.Context, subject string, grade int, counts map[string]int, material string, images []store.MaterialImage) ([]RawQuestion, error) {
+	prompt := buildPrompt(subject, grade, counts, material, len(images))
 	total := 0
 	for _, v := range counts {
 		if v > 0 {
 			total += v
 		}
 	}
+	// Content stays a plain string when there are no images to attach —
+	// same request shape as before this field existed, so a text-only model
+	// (the configured default) isn't handed a content-parts array it may
+	// not understand.
+	var userContent any = prompt
+	if len(images) > 0 {
+		parts := []contentPart{textPart(prompt)}
+		for _, img := range images {
+			parts = append(parts, imagePart(img.URL))
+		}
+		userContent = parts
+	}
 	messages := []chatMessage{
 		{Role: "system", Content: "Anda pembuat soal ujian sekolah Indonesia. Anda selalu menjawab dengan JSON valid saja."},
-		{Role: "user", Content: prompt},
+		{Role: "user", Content: userContent},
 	}
 
 	var lastErr error
@@ -266,7 +297,7 @@ func (c *Client) GenerateQuiz(ctx context.Context, subject string, grade int, co
 		if err != nil {
 			return nil, err
 		}
-		questions, verr := validateQuestions([]byte(content), counts)
+		questions, verr := validateQuestions([]byte(content), counts, len(images))
 		if verr == nil {
 			return questions, nil
 		}

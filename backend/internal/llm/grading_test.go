@@ -32,7 +32,7 @@ func requestItems(r *http.Request) []ShortAnswerItem {
 		Messages []chatMessage `json:"messages"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
-	prompt := body.Messages[len(body.Messages)-1].Content
+	prompt, _ := body.Messages[len(body.Messages)-1].Content.(string)
 	start := indexOf(prompt, "Item jawaban:\n") + len("Item jawaban:\n")
 	end := indexOf(prompt, "\n\nBalas HANYA JSON valid:")
 	var items []ShortAnswerItem

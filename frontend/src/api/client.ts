@@ -69,6 +69,11 @@ export interface SubmitResponse {
   expired: boolean;
 }
 
+export interface MaterialImage {
+  url: string;
+  name: string;
+}
+
 export interface Material {
   id: string;
   subject_id?: string | null;
@@ -79,6 +84,8 @@ export interface Material {
   title: string;
   content: string;
   file_name: string | null;
+  file_url: string | null;
+  images: MaterialImage[];
   created_by: string | null;
   created_at: string;
 }

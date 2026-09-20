@@ -37,8 +37,19 @@ type Material struct {
 	Title      string            `json:"title"`
 	Content    string            `json:"content"`
 	FileName   *string           `json:"file_name"`
+	FileURL    *string           `json:"file_url"`
+	Images     []MaterialImage   `json:"images"`
 	CreatedBy  *string           `json:"created_by"`
 	CreatedAt  time.Time         `json:"created_at"`
+}
+
+// MaterialImage is one image extracted from a material's uploaded file
+// (docx media or embedded PDF image), already uploaded to Supabase Storage.
+// It's offered to quiz generation both as multimodal LLM context and as a
+// gambar_tipe:"material" candidate to attach to a generated question.
+type MaterialImage struct {
+	URL  string `json:"url"`
+	Name string `json:"name"`
 }
 
 // Question is one item of a quiz package's `questions` jsonb array.

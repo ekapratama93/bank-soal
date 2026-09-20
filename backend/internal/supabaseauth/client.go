@@ -13,7 +13,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 )
 
@@ -30,10 +30,10 @@ var ErrInvalidCredentials = errors.New("email atau password salah")
 var ErrInvalidSession = errors.New("sesi tidak valid, silakan login ulang")
 
 type Client struct {
-	BaseURL    string
-	ServiceKey string
-	httpClient *http.Client
-	bucketDone atomic.Bool
+	BaseURL     string
+	ServiceKey  string
+	httpClient  *http.Client
+	bucketsDone sync.Map // bucket name -> struct{}, set once ensureBucket has run for it
 }
 
 func New(baseURL, serviceKey string) *Client {

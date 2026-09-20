@@ -40,9 +40,28 @@ func NewClient(apiKey, model, imageModel, url string) *Client {
 	}
 }
 
+// chatMessage's Content is either a plain string (the common case) or a
+// []contentPart when the message carries image inputs alongside text —
+// OpenRouter/OpenAI-style multimodal messages accept both shapes.
 type chatMessage struct {
 	Role    string `json:"role"`
-	Content string `json:"content"`
+	Content any    `json:"content"`
+}
+
+type contentPart struct {
+	Type     string        `json:"type"`
+	Text     string        `json:"text,omitempty"`
+	ImageURL *contentImage `json:"image_url,omitempty"`
+}
+
+type contentImage struct {
+	URL string `json:"url"`
+}
+
+func textPart(text string) contentPart { return contentPart{Type: "text", Text: text} }
+
+func imagePart(url string) contentPart {
+	return contentPart{Type: "image_url", ImageURL: &contentImage{URL: url}}
 }
 
 // retryableStatus are statuses worth retrying (transient) — not e.g. 400/401
