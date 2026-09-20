@@ -14,9 +14,9 @@ import (
 
 // maxAnswerKeys/maxAnswerValueLength bound the payload of this anonymous
 // endpoint — an exam type's own question count is capped at 50 (see
-// exam_types.go), and "isian" values go raw into the AI grading prompt for
-// "deskripsi" items, so an unbounded payload could needlessly inflate
-// AI cost/latency.
+// exam_types.go), and answer values go raw into the AI grading prompt for
+// "isian"/"deskripsi" items, so an unbounded payload could needlessly
+// inflate AI cost/latency.
 const (
 	maxAnswerKeys        = 100
 	maxAnswerValueLength = 5000
@@ -135,30 +135,45 @@ func (h *Handlers) handleSubmitQuiz(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// "isian" is graded locally (string comparison, see internal/textmatch)
-	// — only "deskripsi" genuinely needs AI grading (completeness/accuracy
-	// of content, not just string matching). This keeps the AI batch much
-	// smaller and submission much faster.
-	var shortItems []llm.ShortAnswerItem
+	// Both "isian" and "deskripsi" are graded by AI, but kept as separate
+	// batches/calls so they fail independently: "deskripsi" has no good
+	// local fallback and is rare (never auto-composed, only admin-custom),
+	// so it still hard-fails the submission on AI error. "isian" appears in
+	// nearly every quiz, so it falls back to the local matcher (see
+	// internal/textmatch) on AI error instead of failing the submission.
+	var isianItems, deskripsiItems []llm.ShortAnswerItem
 	for i, q := range quiz.Questions {
-		if q.Tipe == "deskripsi" {
-			jawabanSiswa := strings.TrimSpace(answerString(body.Answers[strconv.Itoa(i)]))
-			shortItems = append(shortItems, llm.ShortAnswerItem{
-				Index: i, Tipe: q.Tipe, Pertanyaan: q.Pertanyaan,
-				JawabanModel: q.JawabanString(), JawabanSiswa: jawabanSiswa,
-			})
+		if q.Tipe != "isian" && q.Tipe != "deskripsi" {
+			continue
+		}
+		jawabanSiswa := strings.TrimSpace(answerString(body.Answers[strconv.Itoa(i)]))
+		item := llm.ShortAnswerItem{
+			Index: i, Tipe: q.Tipe, Pertanyaan: q.Pertanyaan,
+			JawabanModel: q.JawabanString(), JawabanSiswa: jawabanSiswa,
+		}
+		if q.Tipe == "isian" {
+			isianItems = append(isianItems, item)
+		} else {
+			deskripsiItems = append(deskripsiItems, item)
 		}
 	}
-	shortResults := map[int]llm.ShortAnswerResult{}
-	if len(shortItems) > 0 {
+	deskripsiResults := map[int]llm.ShortAnswerResult{}
+	if len(deskripsiItems) > 0 {
 		// Skip the AI call entirely when there's no "deskripsi" question —
 		// not just for speed, but so a package with none never fails (502)
 		// over an AI hiccup it never actually needed.
-		shortResults, err = h.LLM.GradeShortAnswers(ctx, shortItems)
+		deskripsiResults, err = h.LLM.GradeShortAnswers(ctx, deskripsiItems)
 		if err != nil {
 			writeError(w, http.StatusBadGateway, err.Error())
 			return
 		}
+	}
+	// AI grading failure for "isian" is NOT fatal — isianResults is simply
+	// left empty on error, and the per-question loop below falls back to
+	// textmatch.GradeIsian for any index missing from it.
+	var isianResults map[int]llm.ShortAnswerResult
+	if len(isianItems) > 0 {
+		isianResults, _ = h.LLM.GradeShortAnswers(ctx, isianItems)
 	}
 
 	poinCfg := map[string]int{}
@@ -209,15 +224,27 @@ func (h *Handlers) handleSubmitQuiz(w http.ResponseWriter, r *http.Request) {
 			}
 		case "isian":
 			s := strings.TrimSpace(answerString(jawaban))
-			verdict, skor = textmatch.GradeIsian(s, q.JawabanString())
-			umpanBalik = feedbackFor(verdict == "benar")
+			if hasil, ok := isianResults[i]; ok {
+				// Graded by AI (see isianItems above).
+				verdict, skor = hasil.Verdict, hasil.Skor
+				umpanBalik = hasil.UmpanBalik
+				if umpanBalik == "" {
+					umpanBalik = feedbackFor(verdict == "benar")
+				}
+			} else {
+				// AI grading unavailable for this item (call failed, or
+				// never attempted) — fall back to the local matcher so the
+				// submission still succeeds.
+				verdict, skor = textmatch.GradeIsian(s, q.JawabanString())
+				umpanBalik = feedbackFor(verdict == "benar")
+			}
 			jawabanBenar = q.JawabanString()
 			jawabanSiswa = s
 			if jawabanSiswa == "" {
 				jawabanSiswa = "-"
 			}
-		default: // "deskripsi" — graded by AI (see shortItems above)
-			if hasil, ok := shortResults[i]; ok {
+		default: // "deskripsi" — graded by AI (see deskripsiItems above)
+			if hasil, ok := deskripsiResults[i]; ok {
 				verdict, skor = hasil.Verdict, hasil.Skor
 				umpanBalik = hasil.UmpanBalik
 				if umpanBalik == "" {

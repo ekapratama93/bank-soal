@@ -19,6 +19,12 @@ func item(i int) ShortAnswerItem {
 	}
 }
 
+func isianItem(i int) ShortAnswerItem {
+	it := item(i)
+	it.Tipe = "isian"
+	return it
+}
+
 // requestItems extracts the ShortAnswerItem list actually sent in a
 // gradeBatch prompt, by pulling it back out of the chat request body.
 func requestItems(r *http.Request) []ShortAnswerItem {
@@ -46,20 +52,22 @@ func indexOf(s, substr string) int {
 func hasilJSON(items []ShortAnswerItem) []byte {
 	type h struct {
 		Index      int     `json:"index"`
-		Verdict    string  `json:"verdict"`
 		Skor       float64 `json:"skor"`
 		UmpanBalik string  `json:"umpan_balik"`
 	}
 	hasil := make([]h, len(items))
 	for i, it := range items {
-		hasil[i] = h{Index: it.Index, Verdict: "benar", Skor: 1.0, UmpanBalik: "ok"}
+		hasil[i] = h{Index: it.Index, Skor: 1.0, UmpanBalik: "ok"}
 	}
 	b, _ := json.Marshal(map[string]any{"hasil": hasil})
 	return b
 }
 
 func TestGradeShortAnswersSmallBatchUsesSingleCall(t *testing.T) {
-	items := []ShortAnswerItem{item(0), item(1), item(2), item(3)} // == gradeBatchSize
+	items := make([]ShortAnswerItem, gradeBatchSize)
+	for i := range items {
+		items[i] = item(i)
+	}
 	var calls int32
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&calls, 1)
@@ -72,13 +80,15 @@ func TestGradeShortAnswersSmallBatchUsesSingleCall(t *testing.T) {
 	if calls != 1 {
 		t.Errorf("calls = %d, want 1", calls)
 	}
-	if len(result) != 4 {
-		t.Errorf("len(result) = %d, want 4", len(result))
+	if len(result) != gradeBatchSize {
+		t.Errorf("len(result) = %d, want %d", len(result), gradeBatchSize)
 	}
 }
 
 func TestGradeShortAnswersLargeBatchSplitsIntoMultipleCalls(t *testing.T) {
-	items := make([]ShortAnswerItem, 10) // > gradeBatchSize (4)
+	n := gradeBatchSize*2 + 3
+	wantBatches := (n + gradeBatchSize - 1) / gradeBatchSize
+	items := make([]ShortAnswerItem, n)
 	for i := range items {
 		items[i] = item(i)
 	}
@@ -95,14 +105,13 @@ func TestGradeShortAnswersLargeBatchSplitsIntoMultipleCalls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// 10 items / 4 per batch -> 3 calls (4, 4, 2), not one big call.
-	if len(batchSizes) != 3 {
-		t.Fatalf("got %d calls, want 3: %v", len(batchSizes), batchSizes)
+	if len(batchSizes) != wantBatches {
+		t.Fatalf("got %d calls, want %d: %v", len(batchSizes), wantBatches, batchSizes)
 	}
-	if len(result) != 10 {
-		t.Errorf("len(result) = %d, want 10", len(result))
+	if len(result) != n {
+		t.Errorf("len(result) = %d, want %d", len(result), n)
 	}
-	for i := 0; i < 10; i++ {
+	for i := 0; i < n; i++ {
 		if _, ok := result[i]; !ok {
 			t.Errorf("missing index %d in merged result", i)
 		}
@@ -110,7 +119,7 @@ func TestGradeShortAnswersLargeBatchSplitsIntoMultipleCalls(t *testing.T) {
 }
 
 func TestGradeShortAnswersBatchesRunConcurrently(t *testing.T) {
-	items := make([]ShortAnswerItem, 8) // -> 2 batches
+	items := make([]ShortAnswerItem, gradeBatchSize+1) // -> 2 batches
 	for i := range items {
 		items[i] = item(i)
 	}
@@ -136,8 +145,39 @@ func TestGradeShortAnswersBatchesRunConcurrently(t *testing.T) {
 	}
 }
 
+func TestGradeShortAnswersConcurrencyCapped(t *testing.T) {
+	n := gradeBatchSize * (maxConcurrentBatches + 2) // -> maxConcurrentBatches+2 batches
+	items := make([]ShortAnswerItem, n)
+	for i := range items {
+		items[i] = item(i)
+	}
+	var inFlight, maxInFlight int32
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		cur := atomic.AddInt32(&inFlight, 1)
+		for {
+			old := atomic.LoadInt32(&maxInFlight)
+			if cur <= old || atomic.CompareAndSwapInt32(&maxInFlight, old, cur) {
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+		batch := requestItems(r)
+		atomic.AddInt32(&inFlight, -1)
+		w.Write(chatOKResponse(string(hasilJSON(batch))))
+	})
+	if _, err := c.GradeShortAnswers(context.Background(), items); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if maxInFlight > maxConcurrentBatches {
+		t.Errorf("maxInFlight = %d, want <= %d (maxConcurrentBatches)", maxInFlight, maxConcurrentBatches)
+	}
+	if maxInFlight != maxConcurrentBatches {
+		t.Errorf("maxInFlight = %d, want exactly %d given %d batches to schedule", maxInFlight, maxConcurrentBatches, maxConcurrentBatches+2)
+	}
+}
+
 func TestGradeShortAnswersOneFailingBatchReturnsError(t *testing.T) {
-	items := make([]ShortAnswerItem, 8) // -> 2 batches
+	items := make([]ShortAnswerItem, gradeBatchSize+1) // -> 2 batches
 	for i := range items {
 		items[i] = item(i)
 	}
@@ -156,8 +196,47 @@ func TestGradeShortAnswersOneFailingBatchReturnsError(t *testing.T) {
 	}
 }
 
+func TestGradeShortAnswersRetriesOnChatErrorThenSucceeds(t *testing.T) {
+	items := []ShortAnswerItem{item(0)}
+	var calls int32
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&calls, 1)
+		if n == 1 {
+			w.WriteHeader(http.StatusUnauthorized) // non-retryable at the chat() level -> chat() returns an error immediately
+			return
+		}
+		w.Write(chatOKResponse(string(hasilJSON(items))))
+	})
+	result, err := c.GradeShortAnswers(context.Background(), items)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if calls != 2 {
+		t.Errorf("calls = %d, want 2 (a chat() error should be retried, not returned immediately)", calls)
+	}
+	if len(result) != 1 {
+		t.Errorf("len(result) = %d, want 1", len(result))
+	}
+}
+
+func TestGradeShortAnswersGivesUpAfterMaxAttemptsOnSustainedChatError(t *testing.T) {
+	items := []ShortAnswerItem{item(0)}
+	var calls int32
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	if _, err := c.GradeShortAnswers(context.Background(), items); err == nil {
+		t.Fatal("expected an error after sustained chat() failure")
+	}
+	if calls != gradeMaxAttempts {
+		t.Errorf("calls = %d, want %d (gradeMaxAttempts)", calls, gradeMaxAttempts)
+	}
+}
+
 func TestGradeShortAnswersMergedResultsPreserveScoresPerItem(t *testing.T) {
-	items := make([]ShortAnswerItem, 6) // -> batches of 4, 2
+	n := gradeBatchSize + 2 // -> multiple single-item requests
+	items := make([]ShortAnswerItem, n)
 	for i := range items {
 		items[i] = item(i)
 	}
@@ -165,13 +244,12 @@ func TestGradeShortAnswersMergedResultsPreserveScoresPerItem(t *testing.T) {
 		batch := requestItems(r)
 		type h struct {
 			Index      int     `json:"index"`
-			Verdict    string  `json:"verdict"`
 			Skor       float64 `json:"skor"`
 			UmpanBalik string  `json:"umpan_balik"`
 		}
 		hasil := make([]h, len(batch))
 		for i, it := range batch {
-			hasil[i] = h{Index: it.Index, Verdict: "parsial", Skor: float64(it.Index) / 10, UmpanBalik: "catatan " + strconv.Itoa(it.Index)}
+			hasil[i] = h{Index: it.Index, Skor: float64(it.Index) / 10, UmpanBalik: "catatan " + strconv.Itoa(it.Index)}
 		}
 		b, _ := json.Marshal(map[string]any{"hasil": hasil})
 		w.Write(chatOKResponse(string(b)))
@@ -180,7 +258,7 @@ func TestGradeShortAnswersMergedResultsPreserveScoresPerItem(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	for i := 0; i < 6; i++ {
+	for i := 0; i < n; i++ {
 		want := float64(i) / 10
 		if result[i].Skor != want {
 			t.Errorf("result[%d].Skor = %v, want %v", i, result[i].Skor, want)
@@ -207,7 +285,7 @@ func TestGradeShortAnswersEmptyItemsNoCall(t *testing.T) {
 func TestGradeShortAnswersSkorClamped(t *testing.T) {
 	items := []ShortAnswerItem{item(0)}
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Write(chatOKResponse(`{"hasil": [{"index": 0, "verdict": "parsial", "skor": 1.7, "umpan_balik": "x"}]}`))
+		w.Write(chatOKResponse(`{"hasil": [{"index": 0, "skor": 1.7, "umpan_balik": "x"}]}`))
 	})
 	result, err := c.GradeShortAnswers(context.Background(), items)
 	if err != nil {
@@ -225,5 +303,56 @@ func TestGradeShortAnswersMissingIndexFailsAfterRetry(t *testing.T) {
 	})
 	if _, err := c.GradeShortAnswers(context.Background(), items); err == nil {
 		t.Fatal("expected an error for a response missing the requested index")
+	}
+}
+
+func TestGradeShortAnswersIsianSkorRoundedToBinary(t *testing.T) {
+	items := []ShortAnswerItem{isianItem(0), isianItem(1), item(2)} // isian below threshold, isian above threshold, deskripsi
+	skorByIndex := map[int]float64{0: 0.3, 1: 0.6, 2: 0.6}
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		// Model disobeys the "isian skor must be exactly 0.0 or 1.0" instruction.
+		batch := requestItems(r)
+		type h struct {
+			Index      int     `json:"index"`
+			Skor       float64 `json:"skor"`
+			UmpanBalik string  `json:"umpan_balik"`
+		}
+		hasil := make([]h, len(batch))
+		for i, it := range batch {
+			hasil[i] = h{Index: it.Index, Skor: skorByIndex[it.Index], UmpanBalik: "x"}
+		}
+		b, _ := json.Marshal(map[string]any{"hasil": hasil})
+		w.Write(chatOKResponse(string(b)))
+	})
+	result, err := c.GradeShortAnswers(context.Background(), items)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := result[0]; got.Verdict != "salah" || got.Skor != 0 {
+		t.Errorf("isian skor 0.3 = %+v, want rounded down to salah/0.0", got)
+	}
+	if got := result[1]; got.Verdict != "benar" || got.Skor != 1.0 {
+		t.Errorf("isian skor 0.6 = %+v, want rounded up to benar/1.0", got)
+	}
+	if got := result[2]; got.Verdict != "parsial" || got.Skor != 0.6 {
+		t.Errorf("deskripsi skor 0.6 = %+v, want left as parsial/0.6 (not binarized)", got)
+	}
+}
+
+func TestVerdictFromSkor(t *testing.T) {
+	cases := []struct {
+		skor float64
+		want string
+	}{
+		{0, "salah"},
+		{1, "benar"},
+		{0.5, "parsial"},
+		{0.01, "parsial"},
+		{0.99, "parsial"},
+	}
+	for _, c := range cases {
+		if got := verdictFromSkor(c.skor); got != c.want {
+			t.Errorf("verdictFromSkor(%v) = %q, want %q", c.skor, got, c.want)
+		}
 	}
 }
