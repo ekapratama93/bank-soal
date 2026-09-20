@@ -55,16 +55,6 @@ class TestSubjects:
         assert res.status_code == 409
         assert "materi" in res.json()["detail"]
 
-    def test_delete_blocked_by_material_legacy_text_row(self, client, admin_auth, admin_headers):
-        """Baris yang ditulis backend lama selama jendela deploy hanya membawa
-        teks subject (subject_id belum ter-backfill) — tetap harus memblokir."""
-        sub = next(
-            s for s in client.get("/api/subjects").json() if s["name"] == "IPA"
-        )
-        admin_auth.tables["materials"] = [{"id": "m-1", "subject": "IPA"}]
-        res = client.delete(f"/api/subjects/{sub['id']}", headers=admin_headers)
-        assert res.status_code == 409
-
     def test_delete_blocked_by_quiz(self, client, admin_auth, admin_headers):
         sub = next(
             s for s in client.get("/api/subjects").json() if s["name"] == "IPA"

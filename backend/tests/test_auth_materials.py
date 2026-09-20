@@ -215,7 +215,6 @@ class TestMaterials:
         assert body["subject"] == "IPA"
         stored = admin_auth.tables["materials"][0]
         assert stored["subject_id"] == "sub-4"
-        assert stored["subject"] == "IPA"
 
     def test_create_both_fields_subject_id_wins(self, client, admin_auth, admin_headers):
         exam_type_id = self._exam_type(admin_auth)

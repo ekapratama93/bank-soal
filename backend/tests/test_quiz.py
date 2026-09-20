@@ -223,7 +223,6 @@ class TestGenerate:
         assert res.json()["generated"] == 3
         for q in sb.tables["quizzes"]:
             assert q["subject_id"] == "sub-1"
-            assert q["subject"] == "Matematika"
 
     def test_generate_both_fields_subject_id_wins(self, client, sb, admin_auth, admin_headers, monkeypatch):
         exam_type_fixture(sb)
@@ -262,14 +261,14 @@ class TestGenerate:
 
     def test_generate_legacy_subject_name_still_works(self, client, sb, admin_auth, admin_headers, monkeypatch):
         """Kompatibilitas masa transisi: payload legacy (nama) masih diterima
-        dan baris yang dihasilkan membawa subject_id + subject (nama)."""
+        dan baris yang dihasilkan membawa subject_id (fase 2: kolom teks sudah
+        tidak ditulis lagi)."""
         exam_type_fixture(sb)
         make_generate_ok(monkeypatch)
         res = self._generate(client, admin_headers)  # subject: "Matematika"
         assert res.status_code == 200
         for q in sb.tables["quizzes"]:
             assert q["subject_id"] == "sub-1"
-            assert q["subject"] == "Matematika"
 
     def test_exam_type_overrides_grade_config(self, client, sb, admin_auth, admin_headers, monkeypatch):
         exam_type_fixture(sb)

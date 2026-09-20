@@ -57,10 +57,9 @@ def resolve_subject(sb, *, subject_id=None, subject=None) -> dict:
 
 
 def subject_columns(sub: dict) -> dict:
-    """Kolom subject yang ditulis saat insert/update materi & kuis selama masa
-    transisi: FK subject_id + teks subject (nama, dibaca kode lama).
-    Fase 2: hapus key "subject" di sini, deploy, lalu jalankan SQL fase 2."""
-    return {"subject_id": sub["id"], "subject": sub["name"]}
+    """Kolom subject yang ditulis saat insert/update materi & kuis.
+    Fase 2: hanya subject_id — kolom teks `subject` sudah dihapus."""
+    return {"subject_id": sub["id"]}
 
 
 def subject_names_map(sb) -> dict[str, str]:

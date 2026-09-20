@@ -358,7 +358,7 @@ def available():
     sb = get_supabase()
     quizzes = (
         sb.table("quizzes")
-        .select("subject, subject_id, grade, exam_type_id, started")
+        .select("subject_id, grade, exam_type_id, started")
         .execute()
         .data
         or []
@@ -419,7 +419,7 @@ def list_attempts(response: Response, request: Request):
     attempts = [a for a in attempts if a.get("submitted_at")]
     quizzes = (
         sb.table("quizzes")
-        .select("id, subject, subject_id, grade, exam_type_id")
+        .select("id, subject_id, grade, exam_type_id")
         .execute()
         .data
         or []

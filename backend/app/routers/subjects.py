@@ -63,15 +63,12 @@ def delete_subject(subject_id: str, admin: dict = Depends(require_admin)):
     existing = sb.table("subjects").select("name").eq("id", subject_id).execute()
     if not existing.data:
         raise HTTPException(status_code=404, detail="Mata pelajaran tidak ditemukan")
-    name = existing.data[0]["name"]
 
-    # Cek pemakaian lewat subject_id (baru) DAN teks nama (baris yang ditulis
-    # backend lama selama jendela deploy sebelum backfill).
+    # Cek pemakaian lewat subject_id (FK). Baris lama sudah tertangani oleh
+    # backfill di schema.sql, jadi tidak ada lagi fallback teks nama.
     used_materials = (
         sb.table("materials").select("id").eq("subject_id", subject_id).execute()
     )
-    if not used_materials.data:
-        used_materials = sb.table("materials").select("id").eq("subject", name).execute()
     if used_materials.data:
         raise HTTPException(
             status_code=409,
@@ -80,8 +77,6 @@ def delete_subject(subject_id: str, admin: dict = Depends(require_admin)):
     used_quizzes = (
         sb.table("quizzes").select("id").eq("subject_id", subject_id).execute()
     )
-    if not used_quizzes.data:
-        used_quizzes = sb.table("quizzes").select("id").eq("subject", name).execute()
     if used_quizzes.data:
         raise HTTPException(
             status_code=409,
