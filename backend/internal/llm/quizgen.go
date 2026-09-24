@@ -82,7 +82,7 @@ func buildPrompt(subject string, grade int, counts map[string]int, material stri
 
 	return fmt.Sprintf(`Buat soal ujian mata pelajaran %s untuk kelas %d sekolah Indonesia. Komposisi soal: %s.
 
-%sSemua teks soal, opsi, jawaban, dan pembahasan HARUS dalam Bahasa Indonesia yang sesuai untuk jenjang kelas tersebut. Jika materi memuat kutipan ayat Al-Qur'an, Hadis, atau istilah/frasa berbahasa Arab, PERTAHANKAN teks Arabnya persis apa adanya (jangan ditransliterasi ke huruf Latin, jangan hanya diterjemahkan tanpa teks aslinya); sertakan juga arti/terjemahannya dalam Bahasa Indonesia bila relevan.
+%s%s Jika materi memuat kutipan ayat Al-Qur'an, Hadis, atau istilah/frasa berbahasa Arab, PERTAHANKAN teks Arabnya persis apa adanya (jangan ditransliterasi ke huruf Latin, jangan hanya diterjemahkan tanpa teks aslinya); sertakan juga arti/terjemahannya dalam Bahasa Indonesia bila relevan.
 
 Jika soal memuat rumus, persamaan, pecahan, pangkat, akar, atau notasi matematika lain, tulis menggunakan LaTeX: gunakan $...$ untuk notasi sebaris (contoh: $x^2 + 1$) dan $$...$$ untuk persamaan berdiri sendiri (contoh: $$\frac{a}{b} = c$$). Ini boleh muncul di pertanyaan, opsi, maupun pembahasan. Selain notasi matematika ini, jangan gunakan format markdown lain (tanpa bold, tanpa list, tanpa heading) — teks biasa saja.
 
@@ -98,18 +98,55 @@ Balas HANYA dengan JSON valid (tanpa teks lain) dengan format:
   {"tipe": "deskripsi", "pertanyaan": "...", "jawaban": "uraian jawaban model berupa beberapa kalimat", "pembahasan": "..."}
 ]}
 
-Untuk pilihan_ganda, jawaban adalah indeks opsi yang benar (0-3). Untuk deskripsi, jawaban adalah jawaban model berupa uraian lengkap (beberapa kalimat) yang memuat seluruh poin penting yang diharapkan dari siswa. Pembahasan harus menjelaskan mengapa jawaban tersebut benar.`, subject, grade, countsText, materiText, materialImageNote(imageCount))
+Untuk pilihan_ganda, jawaban adalah indeks opsi yang benar (0-3). Untuk deskripsi, jawaban adalah jawaban model berupa uraian lengkap (beberapa kalimat) yang memuat seluruh poin penting yang diharapkan dari siswa. Pembahasan harus menjelaskan mengapa jawaban tersebut benar.`, subject, grade, countsText, materiText, languageInstruction(subject), materialImageNote(imageCount))
 }
 
-// materialImageNote extends the gambar_tipe instructions with a third
-// option when material images were attached to this prompt as multimodal
-// input (see GenerateQuiz) — the LLM can point a question at one of the
-// images it was actually shown instead of only generating/searching one.
+// targetLanguage returns the language a foreign-language subject is taught
+// in ("Inggris" for "Bahasa Inggris"/"English"), or "" when the quiz should
+// be written in Bahasa Indonesia — every other subject, and Bahasa
+// Indonesia itself.
+func targetLanguage(subject string) string {
+	s := strings.ToLower(strings.TrimSpace(subject))
+	if strings.Contains(s, "english") || strings.Contains(s, "inggris") {
+		return "Inggris"
+	}
+	if rest, ok := strings.CutPrefix(s, "bahasa "); ok && rest != "indonesia" {
+		lang := strings.TrimSpace(rest)
+		if lang == "" {
+			return ""
+		}
+		return strings.ToUpper(lang[:1]) + lang[1:]
+	}
+	return ""
+}
+
+// languageInstruction tells the LLM which language to write the quiz in. A
+// foreign-language subject (e.g. Bahasa Inggris) is tested in that language
+// — otherwise the prompt's Indonesian framing makes the LLM write an
+// English quiz in Bahasa Indonesia — while the pembahasan stays in Bahasa
+// Indonesia so students can follow the explanation.
+func languageInstruction(subject string) string {
+	lang := targetLanguage(subject)
+	if lang == "" {
+		return "Semua teks soal, opsi, jawaban, dan pembahasan HARUS dalam Bahasa Indonesia yang sesuai untuk jenjang kelas tersebut."
+	}
+	return fmt.Sprintf(`Ini adalah ujian mata pelajaran bahasa asing: teks pertanyaan, opsi, dan jawaban HARUS dalam Bahasa %[1]s yang sesuai untuk jenjang kelas tersebut (jangan diterjemahkan ke Bahasa Indonesia). Pembahasan ditulis dalam Bahasa Indonesia dan boleh mengutip kata/kalimat Bahasa %[1]s. Nilai field "tipe" dan jawaban benar_salah tetap "benar"/"salah" seperti format di bawah.`, lang)
+}
+
+// materialImageNote tells the LLM about material images attached to this
+// prompt as multimodal input (see GenerateQuiz) — context only, so it can
+// see and write accurate questions about a diagram/photo from the material.
+// It must never reuse one of these images directly as a question's own
+// picture: "gambar_tipe" stays limited to "generated"/"stock", so when a
+// question needs to depict a diagram/illustration it saw here, it should
+// describe that diagram in "gambar_prompt" (detailed enough to be
+// faithfully redrawn) and use "generated" rather than pointing back at the
+// material image.
 func materialImageNote(imageCount int) string {
 	if imageCount == 0 {
 		return ""
 	}
-	return fmt.Sprintf(` Anda juga diberikan %d gambar dari materi ajar (urut sesuai kemunculannya). Jika salah satu gambar tersebut relevan dan cukup untuk soal (mis. diagram/peta/foto yang sama persis dibutuhkan), gunakan "gambar_tipe": "material" dan sertakan "gambar_index": nomor urut gambar itu (1 sampai %d) alih-alih membuat atau mencari gambar baru.`, imageCount, imageCount)
+	return fmt.Sprintf(` Anda juga diberikan %d gambar dari materi ajar (urut sesuai kemunculannya) sebagai KONTEKS SAJA, untuk membantu Anda memahami dan menulis soal yang akurat tentang diagram/foto tersebut. JANGAN PERNAH menggunakan gambar materi ini langsung sebagai gambar soal. Jika sebuah soal perlu menampilkan diagram/ilustrasi yang Anda lihat di materi, gunakan "gambar_tipe": "generated" dan tulis "gambar_prompt" yang mendeskripsikan diagram/ilustrasi tersebut secara rinci (bukan deskripsi samar) agar bisa digambar ulang dengan akurat.`, imageCount)
 }
 
 func hasBalancedMathDelimiters(text string) bool {
@@ -141,7 +178,6 @@ type RawQuestion struct {
 	GambarTipe   string          `json:"gambar_tipe,omitempty"`
 	GambarPrompt string          `json:"gambar_prompt,omitempty"`
 	GambarCari   string          `json:"gambar_cari,omitempty"`
-	GambarIndex  int             `json:"gambar_index,omitempty"`
 	Gambar       string          `json:"-"`
 }
 
@@ -243,7 +279,7 @@ func validateQuestions(raw []byte, counts map[string]int, imageCount int) ([]Raw
 		}
 
 		if q.GambarTipe != "" {
-			if q.GambarTipe != "generated" && q.GambarTipe != "stock" && q.GambarTipe != "material" {
+			if q.GambarTipe != "generated" && q.GambarTipe != "stock" {
 				return nil, fmt.Errorf("soal %d: gambar_tipe tidak valid: %s", i, q.GambarTipe)
 			}
 			if q.GambarTipe == "generated" && strings.TrimSpace(q.GambarPrompt) == "" {
@@ -251,9 +287,6 @@ func validateQuestions(raw []byte, counts map[string]int, imageCount int) ([]Raw
 			}
 			if q.GambarTipe == "stock" && strings.TrimSpace(q.GambarCari) == "" {
 				return nil, fmt.Errorf("soal %d: gambar_cari kosong", i)
-			}
-			if q.GambarTipe == "material" && (q.GambarIndex < 1 || q.GambarIndex > imageCount) {
-				return nil, fmt.Errorf("soal %d: gambar_index di luar jangkauan (1-%d)", i, imageCount)
 			}
 		}
 	}
@@ -283,8 +316,9 @@ const quizGenMaxAttempts = 3
 // a validation failure — up to quizGenMaxAttempts total. Material images
 // (already hosted at public URLs) are attached to the user message as
 // multimodal input, so the LLM can see diagrams/photos from the source
-// material rather than only their surrounding text, and may point a
-// question at one of them via gambar_tipe:"material"/gambar_index.
+// material rather than only their surrounding text — as context only; it
+// must still generate/search a fresh image for any question rather than
+// reusing one of these directly (see materialImageNote).
 func (c *Client) GenerateQuiz(ctx context.Context, subject string, grade int, counts map[string]int, material string, images []store.MaterialImage) ([]RawQuestion, error) {
 	prompt := buildPrompt(subject, grade, counts, material, len(images))
 	total := 0

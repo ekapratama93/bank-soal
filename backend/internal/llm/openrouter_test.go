@@ -16,7 +16,7 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) *Client {
 	t.Helper()
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
-	return NewClient("fake-key-for-tests", "test-model", "test-image-model", srv.URL)
+	return NewClient("fake-key-for-tests", "test-model", "test-image-model", srv.URL, srv.URL)
 }
 
 func chatOKResponse(content string) []byte {
@@ -44,7 +44,7 @@ func TestChatRetriesOnConnectionErrorThenSucceeds(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewClient("fake-key-for-tests", "test-model", "test-image-model", srv.URL)
+	c := NewClient("fake-key-for-tests", "test-model", "test-image-model", srv.URL, srv.URL)
 	content, err := c.chat(context.Background(), []chatMessage{{Role: "user", Content: "x"}})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -65,7 +65,7 @@ func TestChatGivesUpAfterSustainedConnectionFailure(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewClient("fake-key-for-tests", "test-model", "test-image-model", srv.URL)
+	c := NewClient("fake-key-for-tests", "test-model", "test-image-model", srv.URL, srv.URL)
 	_, err := c.chat(context.Background(), []chatMessage{{Role: "user", Content: "x"}})
 	if err == nil {
 		t.Fatal("expected an error")

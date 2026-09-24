@@ -27,15 +27,17 @@ type Client struct {
 	Model      string
 	ImageModel string
 	URL        string
+	ImagesURL  string
 	HTTPClient *http.Client
 }
 
-func NewClient(apiKey, model, imageModel, url string) *Client {
+func NewClient(apiKey, model, imageModel, url, imagesURL string) *Client {
 	return &Client{
 		APIKey:     apiKey,
 		Model:      model,
 		ImageModel: imageModel,
 		URL:        url,
+		ImagesURL:  imagesURL,
 		HTTPClient: &http.Client{Timeout: 180 * time.Second},
 	}
 }

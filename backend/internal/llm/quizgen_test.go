@@ -21,6 +21,48 @@ func TestBuildPromptPreservesArabicQuotesInstruction(t *testing.T) {
 	}
 }
 
+func TestTargetLanguage(t *testing.T) {
+	cases := map[string]string{
+		"Bahasa Inggris":   "Inggris",
+		"bahasa inggris":   "Inggris",
+		"English":          "Inggris",
+		"Bahasa Arab":      "Arab",
+		"Bahasa Jawa":      "Jawa",
+		"Bahasa Indonesia": "",
+		"Matematika":       "",
+		"Bahasa":           "",
+	}
+	for subject, want := range cases {
+		if got := targetLanguage(subject); got != want {
+			t.Errorf("targetLanguage(%q) = %q, want %q", subject, got, want)
+		}
+	}
+}
+
+func TestBuildPromptLanguage(t *testing.T) {
+	en := buildPrompt("Bahasa Inggris", 5, validCounts, "", 0)
+	if !strings.Contains(en, "HARUS dalam Bahasa Inggris") {
+		t.Error("English quiz prompt should require English questions")
+	}
+	if strings.Contains(en, "pembahasan HARUS dalam Bahasa Indonesia") {
+		t.Error("English quiz prompt should not force everything into Bahasa Indonesia")
+	}
+	ipa := buildPrompt("IPA", 5, validCounts, "", 0)
+	if !strings.Contains(ipa, "pembahasan HARUS dalam Bahasa Indonesia") {
+		t.Error("non-language subject should stay in Bahasa Indonesia")
+	}
+}
+
+func TestBuildPromptMaterialImagesAreContextOnly(t *testing.T) {
+	prompt := buildPrompt("IPA", 5, validCounts, "", 2)
+	if strings.Contains(prompt, `"gambar_tipe": "material"`) {
+		t.Error("prompt should no longer offer gambar_tipe:material")
+	}
+	if !strings.Contains(prompt, "KONTEKS SAJA") {
+		t.Error("prompt should tell the LLM material images are context only")
+	}
+}
+
 func TestBuildPromptCountsIncluded(t *testing.T) {
 	counts := map[string]int{"pilihan_ganda": 10, "benar_salah": 0, "isian": 5, "deskripsi": 5}
 	prompt := buildPrompt("IPA", 5, counts, "", 0)
@@ -144,6 +186,15 @@ func TestValidateQuestionsGambarStockValidPasses(t *testing.T) {
 func TestValidateQuestionsGambarInvalidTipeFails(t *testing.T) {
 	bad := strings.Replace(validQuestionsJSON, `"pembahasan": "2+2=4"`, `"pembahasan": "2+2=4", "gambar_tipe": "lainnya"`, 1)
 	_, err := validateQuestions([]byte(bad), validCounts, 0)
+	assertErrContains(t, err, "gambar_tipe")
+}
+
+// "material" (reusing a material image directly) is no longer an option —
+// see materialImageNote — so it must be rejected like any other invalid
+// gambar_tipe value, even with an otherwise-valid gambar_index.
+func TestValidateQuestionsGambarMaterialFails(t *testing.T) {
+	bad := strings.Replace(validQuestionsJSON, `"pembahasan": "2+2=4"`, `"pembahasan": "2+2=4", "gambar_tipe": "material", "gambar_index": 1`, 1)
+	_, err := validateQuestions([]byte(bad), validCounts, 2)
 	assertErrContains(t, err, "gambar_tipe")
 }
 

@@ -45,7 +45,7 @@ func run() error {
 
 	st := store.New(pool)
 	auth := supabaseauth.New(cfg.SupabaseURL, cfg.SupabaseServiceKey)
-	llmClient := llm.NewClient(cfg.OpenRouterAPIKey, cfg.OpenRouterModel, cfg.OpenRouterImageModel, cfg.OpenRouterURL)
+	llmClient := llm.NewClient(cfg.OpenRouterAPIKey, cfg.OpenRouterModel, cfg.OpenRouterImageModel, cfg.OpenRouterURL, cfg.OpenRouterImagesURL)
 	handlers := httpapi.New(st, auth, llmClient, cfg.FrontendOrigin)
 	router := httpapi.NewRouter(handlers)
 

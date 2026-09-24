@@ -38,9 +38,9 @@ var materialImageMarkerRe = regexp.MustCompile(`\s?\[Gambar (\d+)\]`)
 
 // buildMaterialContext concatenates every material's title+content into one
 // prompt string and flattens their images into one list, capped at
-// maxMaterialImagesForPrompt — the same pairing GenerateQuiz's gambar_index
-// numbering and resolveImages both key off. Each material's own "[Gambar N]"
-// markers are local to that material, so they're rewritten here into the
+// maxMaterialImagesForPrompt, both sent to the LLM as multimodal context
+// (see GenerateQuiz). Each material's own "[Gambar N]" markers are local to
+// that material, so they're rewritten here into the
 // global index its image ends up at in the flattened list; a marker whose
 // image didn't make the cut is dropped, since there's no longer an attached
 // image left for it to point to.
@@ -78,10 +78,11 @@ func renumberMaterialImageMarkers(content string, offset, included int) string {
 // resolveImages turns gambar_tipe/gambar_prompt/gambar_cari markers from
 // the LLM into a real "gambar" URL, up to imageCapPerPaket per package. A
 // failure on any single question must not fail the whole batch — that
-// question just ends up with no image. materialImages is the same list
-// offered to the LLM as multimodal input (see collectMaterialImages), so a
-// gambar_tipe:"material" question's gambar_index resolves against it.
-func (h *Handlers) resolveImages(ctx context.Context, questions []llm.RawQuestion, materialImages []store.MaterialImage) {
+// question just ends up with no image. Material images are only ever
+// offered to the LLM as multimodal context (see GenerateQuiz) and never
+// resolved here directly — every image a question ends up with is freshly
+// generated or fetched.
+func (h *Handlers) resolveImages(ctx context.Context, questions []llm.RawQuestion) {
 	resolved := 0
 	for i := range questions {
 		q := &questions[i]
@@ -90,13 +91,6 @@ func (h *Handlers) resolveImages(ctx context.Context, questions []llm.RawQuestio
 			continue
 		}
 		switch tipe {
-		case "material":
-			idx := q.GambarIndex - 1
-			if idx < 0 || idx >= len(materialImages) {
-				continue
-			}
-			q.Gambar = materialImages[idx].URL
-			resolved++
 		case "generated":
 			if q.GambarPrompt == "" {
 				continue
@@ -241,7 +235,7 @@ func (h *Handlers) handleGenerateQuiz(w http.ResponseWriter, r *http.Request) {
 				genErrs[i] = err
 				return
 			}
-			h.resolveImages(genCtx, rawQuestions, materialImages)
+			h.resolveImages(genCtx, rawQuestions)
 
 			questions := make([]store.Question, len(rawQuestions))
 			for j, rq := range rawQuestions {

@@ -15,6 +15,7 @@ type Config struct {
 	OpenRouterModel      string
 	OpenRouterImageModel string
 	OpenRouterURL        string
+	OpenRouterImagesURL  string
 	SupabaseURL          string
 	SupabaseServiceKey   string
 	DatabaseURL          string
@@ -34,6 +35,7 @@ func Load() (*Config, error) {
 		OpenRouterModel:      getEnvDefault("OPENROUTER_MODEL", "z-ai/glm-4.5-air:free"),
 		OpenRouterImageModel: getEnvDefault("OPENROUTER_IMAGE_MODEL", "google/gemini-2.5-flash-image-preview:free"),
 		OpenRouterURL:        getEnvDefault("OPENROUTER_URL", "https://openrouter.ai/api/v1/chat/completions"),
+		OpenRouterImagesURL:  getEnvDefault("OPENROUTER_IMAGES_URL", "https://openrouter.ai/api/v1/images"),
 		SupabaseURL:          os.Getenv("SUPABASE_URL"),
 		SupabaseServiceKey:   os.Getenv("SUPABASE_SERVICE_KEY"),
 		DatabaseURL:          os.Getenv("DATABASE_URL"),
@@ -45,6 +47,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if err := mustBeHTTPURLIfSet("OPENROUTER_URL", cfg.OpenRouterURL); err != nil {
+		return nil, err
+	}
+	if err := mustBeHTTPURLIfSet("OPENROUTER_IMAGES_URL", cfg.OpenRouterImagesURL); err != nil {
 		return nil, err
 	}
 	return cfg, nil
