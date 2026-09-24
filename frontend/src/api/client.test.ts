@@ -134,7 +134,7 @@ describe("endpoint yang memanggil AI di server memakai tenggang lebih panjang", 
     // tenggang yang jauh lebih panjang.
     expect(settled).toBe(false);
 
-    await vi.advanceTimersByTimeAsync(100_000);
+    await vi.advanceTimersByTimeAsync(600_000);
     const err = await pending;
     expect(settled).toBe(true);
     expect(err).toBeInstanceOf(ApiError);
@@ -159,7 +159,7 @@ describe("endpoint yang memanggil AI di server memakai tenggang lebih panjang", 
     await vi.advanceTimersByTimeAsync(21_000);
     expect(settled).toBe(false);
 
-    await vi.advanceTimersByTimeAsync(100_000);
+    await vi.advanceTimersByTimeAsync(600_000);
     const err = await pending;
     expect(settled).toBe(true);
     expect(err).toBeInstanceOf(ApiError);

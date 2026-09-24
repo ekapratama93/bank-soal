@@ -165,12 +165,19 @@ const DEFAULT_TIMEOUT_MS = 20_000;
 
 /**
  * Endpoint yang memicu panggilan AI di server butuh tenggang jauh lebih
- * panjang (nginx sendiri memberi 300s) — dipakai submitQuiz (koreksi AI
- * jawaban isian) dan generateBatch (bisa memanggil AI berkali-kali, hingga
- * 5 paket sekaligus). Membatalkan terlalu cepat justru berbahaya: prosesnya
- * sudah jalan di server, lalu klien mengira gagal dan mencoba ulang.
+ * panjang — dipakai submitQuiz (koreksi AI jawaban isian) dan generateBatch
+ * (bisa memanggil AI berkali-kali per paket — teks lalu hingga 3 gambar —
+ * untuk hingga 5 paket sekaligus). Membatalkan terlalu cepat justru
+ * berbahaya: prosesnya sudah jalan di server, lalu klien mengira gagal dan
+ * mencoba ulang padahal paketnya tetap akan selesai dibuat.
+ *
+ * Sengaja dibuat sedikit LEBIH LAMA dari proxy_read_timeout nginx (300s →
+ * lihat frontend/nginx.conf.template) supaya, kalau memang melebihi batas,
+ * nginx yang lebih dulu memutus dengan respons 504 yang jelas — bukan
+ * AbortController di sini yang menyerah lebih dulu dan menutupi status
+ * proses yang sesungguhnya masih berjalan di server.
  */
-const LONG_TIMEOUT_MS = 120_000;
+const LONG_TIMEOUT_MS = 610_000;
 
 interface RequestOptions {
   timeoutMs?: number;

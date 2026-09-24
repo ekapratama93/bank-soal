@@ -12,8 +12,12 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_ssl_server_name on;
-        proxy_read_timeout 300s;
-        proxy_send_timeout 300s;
+        # Quiz generation can call the AI several times per package (text,
+        # then up to 3 images) across up to 5 packages — keep this in sync
+        # with LONG_TIMEOUT_MS in frontend/src/api/client.ts (kept slightly
+        # above this value).
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
     }
 
     location /assets/ {
