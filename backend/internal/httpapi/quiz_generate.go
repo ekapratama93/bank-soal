@@ -241,6 +241,7 @@ func (h *Handlers) handleGenerateQuiz(w http.ResponseWriter, r *http.Request) {
 			for j, rq := range rawQuestions {
 				sq, err := rq.ToStoreQuestion()
 				if err != nil {
+					slog.Error("Gagal mengonversi jawaban soal ke bentuk penyimpanan", "paket_index", i, "err", err)
 					mu.Lock()
 					if internalErr == nil {
 						internalErr = err
@@ -257,6 +258,7 @@ func (h *Handlers) handleGenerateQuiz(w http.ResponseWriter, r *http.Request) {
 				Questions: questions, BatchID: batchID, DurasiMenit: durasi,
 			})
 			if err != nil {
+				slog.Error("Gagal menyimpan paket soal ke database", "paket_index", i, "err", err)
 				mu.Lock()
 				if internalErr == nil {
 					internalErr = err
@@ -270,11 +272,10 @@ func (h *Handlers) handleGenerateQuiz(w http.ResponseWriter, r *http.Request) {
 	}
 	wg.Wait()
 
-	if internalErr != nil {
-		writeError(w, http.StatusInternalServerError, "Terjadi kesalahan pada server.")
-		return
-	}
-
+	// A single package's internal (non-LLM) error must not throw away
+	// sibling packages that finished successfully — including ones already
+	// committed to the DB before that error fired and cancelled genCtx. Only
+	// treat the whole batch as failed when NOTHING came out of it.
 	var createdIDs []string
 	var firstGenErr error
 	for i, id := range quizIDs {
@@ -285,6 +286,10 @@ func (h *Handlers) handleGenerateQuiz(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(createdIDs) == 0 {
+		if internalErr != nil {
+			writeError(w, http.StatusInternalServerError, "Terjadi kesalahan pada server.")
+			return
+		}
 		writeError(w, http.StatusBadGateway, firstGenErr.Error())
 		return
 	}
