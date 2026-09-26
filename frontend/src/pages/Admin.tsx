@@ -57,7 +57,6 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
 import {
   AlertTriangle,
   BookOpen,
@@ -81,6 +80,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import QuizPackageDetail from "@/components/QuizPackageDetail";
+import { cn } from "@/lib/utils";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 
 const OPTION_LETTERS = ["A", "B", "C", "D"];
@@ -127,15 +127,15 @@ function StatCard({
 }) {
   return (
     <div
-      className="animate-fade-up group border-border/60 bg-card flex items-center gap-3 rounded-xl border px-4 py-3.5 shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:shadow-md"
+      className="animate-fade-up group border-border/60 bg-card flex items-center gap-2.5 rounded-xl border px-3 py-2 shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:shadow-md"
       style={{ animationDelay: `${delay}ms` }}
     >
-      <span className="bg-secondary text-primary flex size-10 shrink-0 items-center justify-center rounded-full transition-transform duration-300 ease-(--ease-spring) group-hover:scale-110 group-hover:rotate-6">
-        <Icon className="size-5" />
+      <span className="bg-secondary text-primary flex size-8 shrink-0 items-center justify-center rounded-full transition-transform duration-300 ease-(--ease-spring) group-hover:scale-110 group-hover:rotate-6">
+        <Icon className="size-4" />
       </span>
-      <div>
-        <div key={value} className="animate-pop text-xl leading-none font-extrabold">{value}</div>
-        <div className="text-muted-foreground mt-1 text-xs font-semibold">{label}</div>
+      <div className="min-w-0">
+        <div key={value} className="animate-pop text-lg leading-none font-extrabold">{value}</div>
+        <div className="text-muted-foreground mt-0.5 text-xs leading-tight font-semibold">{label}</div>
       </div>
     </div>
   );
@@ -151,6 +151,12 @@ function EmptyState({ icon: Icon, text }: { icon: LucideIcon; text: string }) {
     </div>
   );
 }
+
+// Desktop: form di kiri (sticky), daftar di kanan. Di bawah lg: bertumpuk.
+const SPLIT = "grid gap-4 lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)] lg:items-start";
+// Form yang lebih tinggi dari layar scroll sendiri, supaya tombol simpan tidak
+// tersembunyi di bawah viewport selama daftar di sebelahnya panjang.
+const STICKY_FORM = "lg:sticky lg:top-20 lg:max-h-[calc(100dvh-6rem)] lg:overflow-y-auto";
 
 const TOKEN_KEY = "bank-soal-admin-token";
 
@@ -866,6 +872,11 @@ export default function Admin() {
     }
   }
 
+  function logout() {
+    localStorage.removeItem(TOKEN_KEY);
+    setToken(null);
+  }
+
   if (!token) {
     return (
       <div className="relative flex min-h-[65vh] items-center justify-center overflow-hidden px-4 py-10">
@@ -929,8 +940,8 @@ export default function Admin() {
   }
 
   return (
-    <div className="flex flex-col gap-5">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-5">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex items-center gap-3">
           <div className="animate-pop bg-secondary text-primary flex size-12 shrink-0 items-center justify-center rounded-2xl">
             <ShieldCheck className="size-6" />
@@ -941,23 +952,26 @@ export default function Admin() {
               Kelola mata pelajaran, tipe ujian, materi, dan pool soal.
             </p>
           </div>
+          <Button
+            variant="outline"
+            className="ml-auto lg:hidden"
+            onClick={logout}
+          >
+            <LogOut />
+            Keluar
+          </Button>
         </div>
-        <Button
-          variant="outline"
-          onClick={() => {
-            localStorage.removeItem(TOKEN_KEY);
-            setToken(null);
-          }}
-        >
-          <LogOut />
-          Keluar
-        </Button>
-      </div>
-
-      <div className="grid grid-cols-3 gap-3">
-        <StatCard icon={BookOpen} label="Mata Pelajaran" value={subjects.length} />
-        <StatCard icon={ListChecks} label="Tipe Ujian" value={examTypes.length} delay={80} />
-        <StatCard icon={Layers} label="Materi" value={materials.length} delay={160} />
+        <div className="flex items-center gap-3">
+          <div className="grid flex-1 grid-cols-3 gap-2 lg:flex lg:flex-none">
+            <StatCard icon={BookOpen} label="Mata Pelajaran" value={subjects.length} />
+            <StatCard icon={ListChecks} label="Tipe Ujian" value={examTypes.length} delay={80} />
+            <StatCard icon={Layers} label="Materi" value={materials.length} delay={160} />
+          </div>
+          <Button variant="outline" className="hidden lg:inline-flex" onClick={logout}>
+            <LogOut />
+            Keluar
+          </Button>
+        </div>
       </div>
 
       <Tabs defaultValue="subjects">
@@ -984,16 +998,16 @@ export default function Admin() {
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="subjects" className="flex flex-col gap-4">
-          <Card>
+        <TabsContent value="subjects" className={SPLIT}>
+          <Card className={STICKY_FORM}>
             <CardHeader>
               <div className="flex items-center gap-2 text-primary">
-                <BookOpen className="size-6" />
-                <CardTitle className="text-2xl">Mata Pelajaran</CardTitle>
+                <BookOpen className="size-5" />
+                <CardTitle>Mata Pelajaran</CardTitle>
               </div>
               <CardDescription>Daftar mapel yang dipilih siswa di Beranda.</CardDescription>
             </CardHeader>
-            <CardContent className="flex flex-col gap-4">
+            <CardContent>
               <form onSubmit={handleCreateSubject} className="flex flex-col gap-4">
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="sub-name">Nama Mata Pelajaran</Label>
@@ -1023,17 +1037,34 @@ export default function Admin() {
                   Tambah Mata Pelajaran
                 </Button>
               </form>
-              <Separator />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2 text-primary">
+                <BookOpen className="size-5" />
+                <CardTitle>Daftar Mata Pelajaran</CardTitle>
+              </div>
+            </CardHeader>
+            <CardContent>
               {subjects.length === 0 ? (
                 <EmptyState icon={BookOpen} text="Belum ada mata pelajaran." />
               ) : (
-                <div className="flex flex-col gap-2">
+                <div className="grid gap-2 sm:grid-cols-2">
                   {subjects.map((s) => (
                     <div
                       key={s.id}
-                      className="border-border/60 flex items-center justify-between gap-3 rounded-xl border px-4 py-3 transition-all duration-200 hover:border-primary/40 hover:shadow-md"
+                      className={cn(
+                        "border-border/60 flex items-center justify-between gap-3 rounded-xl border px-3 py-2.5 transition-all duration-200 hover:border-primary/40 hover:shadow-md",
+                        renamingId === s.id && "col-span-full"
+                      )}
                     >
-                      <div className="flex min-w-0 items-center gap-3">
+                      <div
+                        className={cn(
+                          "flex min-w-0 items-center gap-3",
+                          renamingId === s.id && "flex-1"
+                        )}
+                      >
                         <span className="bg-secondary text-primary flex size-9 shrink-0 items-center justify-center rounded-full">
                           <BookOpen className="size-4" />
                         </span>
@@ -1067,14 +1098,17 @@ export default function Admin() {
                             </Button>
                           </form>
                         ) : (
-                          <strong className="font-bold">{s.name}</strong>
+                          <strong className="truncate font-bold">{s.name}</strong>
                         )}
                       </div>
                       {renamingId !== s.id && (
-                        <div className="flex shrink-0 gap-2">
+                        <div className="flex shrink-0 gap-1.5">
                           <Button
                             variant="outline"
-                            size="sm"
+                            size="icon"
+                            className="size-8"
+                            aria-label={`Edit ${s.name}`}
+                            title="Edit"
                             onClick={() => {
                               setRenamingId(s.id);
                               setRenameName(s.name);
@@ -1083,15 +1117,16 @@ export default function Admin() {
                             }}
                           >
                             <Pencil />
-                            Edit
                           </Button>
                           <Button
                             variant="destructive"
-                            size="sm"
+                            size="icon"
+                            className="size-8"
+                            aria-label={`Hapus ${s.name}`}
+                            title="Hapus"
                             onClick={() => void handleDeleteSubject(s.id)}
                           >
                             <Trash2 />
-                            Hapus
                           </Button>
                         </div>
                       )}
@@ -1103,12 +1138,12 @@ export default function Admin() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="exam-types" className="flex flex-col gap-4">
-          <Card>
+        <TabsContent value="exam-types" className={SPLIT}>
+          <Card className={STICKY_FORM}>
             <CardHeader>
               <div className="flex items-center gap-2 text-primary">
-                <ListChecks className="size-6" />
-                <CardTitle className="text-2xl">Tipe Ujian</CardTitle>
+                <ListChecks className="size-5" />
+                <CardTitle>Tipe Ujian</CardTitle>
               </div>
               <CardDescription>
                 Tipe ujian dipilih siswa di Beranda. Jumlah soal dan durasi kosong berarti
@@ -1163,7 +1198,7 @@ export default function Admin() {
                       pilihan ganda, ±20% benar/salah, sisanya isian).
                     </p>
                   </div>
-                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-2">
                     {QUESTION_TYPE_OPTIONS.map((o) => (
                       <div key={o.key} className="flex flex-col gap-1.5">
                         <Label htmlFor={`et-${o.key}`} className="text-xs">
@@ -1193,7 +1228,7 @@ export default function Admin() {
                       selalu dikoreksi &amp; dinilai AI (skor 0–1 × poin tipe).
                     </p>
                   </div>
-                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-2">
                     {QUESTION_TYPE_OPTIONS.map((o) => (
                       <div key={o.key} className="flex flex-col gap-1.5">
                         <Label htmlFor={`et-poin-${o.key}`} className="text-xs">
@@ -1233,7 +1268,16 @@ export default function Admin() {
                   Tambah Tipe Ujian
                 </Button>
               </form>
-              <Separator />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2 text-primary">
+                <ListChecks className="size-5" />
+                <CardTitle>Daftar Tipe Ujian</CardTitle>
+              </div>
+            </CardHeader>
+            <CardContent>
               {examTypes.length === 0 ? (
                 <EmptyState icon={ListChecks} text="Belum ada tipe ujian." />
               ) : (
@@ -1369,11 +1413,11 @@ export default function Admin() {
                         key={t.id}
                         className="border-border/60 flex items-center justify-between gap-3 rounded-xl border px-4 py-3 transition-all duration-200 hover:border-primary/40 hover:shadow-md"
                       >
-                        <div className="flex items-center gap-3">
+                        <div className="flex min-w-0 items-center gap-3">
                           <span className="bg-secondary text-primary flex size-9 shrink-0 items-center justify-center rounded-full">
                             <ListChecks className="size-4" />
                           </span>
-                          <div>
+                          <div className="min-w-0">
                             <strong className="font-bold">{t.name}</strong>
                             <div className="mt-1.5 flex flex-wrap gap-1.5">
                               {t.tipe_soal && Object.keys(t.tipe_soal).length > 0 ? (
@@ -1408,18 +1452,26 @@ export default function Admin() {
                             </div>
                           </div>
                         </div>
-                        <div className="flex shrink-0 gap-2">
-                          <Button variant="outline" size="sm" onClick={() => startEditExamType(t)}>
+                        <div className="flex shrink-0 gap-1.5">
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="size-8"
+                            aria-label={`Edit ${t.name}`}
+                            title="Edit"
+                            onClick={() => startEditExamType(t)}
+                          >
                             <Pencil />
-                            Edit
                           </Button>
                           <Button
                             variant="destructive"
-                            size="sm"
+                            size="icon"
+                            className="size-8"
+                            aria-label={`Hapus ${t.name}`}
+                            title="Hapus"
                             onClick={() => void handleDeleteExamType(t.id)}
                           >
                             <Trash2 />
-                            Hapus
                           </Button>
                         </div>
                       </div>
@@ -1431,12 +1483,12 @@ export default function Admin() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="materials" className="flex flex-col gap-4">
-          <Card>
+        <TabsContent value="materials" className={SPLIT}>
+          <Card className={STICKY_FORM}>
             <CardHeader>
               <div className="flex items-center gap-2 text-primary">
-                <Layers className="size-6" />
-                <CardTitle className="text-2xl">Kelola Materi</CardTitle>
+                <Layers className="size-5" />
+                <CardTitle>Kelola Materi</CardTitle>
               </div>
               <CardDescription>
                 Materi dipakai AI sebagai sumber soal untuk mapel + kelas + tipe ujian yang
@@ -1445,50 +1497,52 @@ export default function Admin() {
             </CardHeader>
             <CardContent>
               <form onSubmit={handleSave} className="flex flex-col gap-4">
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor="m-subject">Mata Pelajaran</Label>
-                  <Select value={subject} onValueChange={setSubject}>
-                    <SelectTrigger id="m-subject">
-                      <SelectValue placeholder="Tidak ada mata pelajaran" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {subjects.map((s) => (
-                        <SelectItem key={s.id} value={s.id}>
-                          {s.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor="m-grade">Kelas</Label>
-                  <Select value={String(grade)} onValueChange={(v) => setGrade(Number(v))}>
-                    <SelectTrigger id="m-grade">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {GRADES.map((g) => (
-                        <SelectItem key={g} value={String(g)}>
-                          Kelas {g}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor="m-exam-type">Tipe Ujian</Label>
-                  <Select value={examTypeId} onValueChange={setExamTypeId}>
-                    <SelectTrigger id="m-exam-type">
-                      <SelectValue placeholder="Tidak ada tipe ujian tersedia" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {examTypes.map((t) => (
-                        <SelectItem key={t.id} value={t.id}>
-                          {t.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-1">
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="m-subject">Mata Pelajaran</Label>
+                    <Select value={subject} onValueChange={setSubject}>
+                      <SelectTrigger id="m-subject">
+                        <SelectValue placeholder="Tidak ada mata pelajaran" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {subjects.map((s) => (
+                          <SelectItem key={s.id} value={s.id}>
+                            {s.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="m-grade">Kelas</Label>
+                    <Select value={String(grade)} onValueChange={(v) => setGrade(Number(v))}>
+                      <SelectTrigger id="m-grade">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {GRADES.map((g) => (
+                          <SelectItem key={g} value={String(g)}>
+                            Kelas {g}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="m-exam-type">Tipe Ujian</Label>
+                    <Select value={examTypeId} onValueChange={setExamTypeId}>
+                      <SelectTrigger id="m-exam-type">
+                        <SelectValue placeholder="Tidak ada tipe ujian tersedia" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {examTypes.map((t) => (
+                          <SelectItem key={t.id} value={t.id}>
+                            {t.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="m-title">Judul Materi</Label>
@@ -1548,8 +1602,8 @@ export default function Admin() {
           <Card>
             <CardHeader>
               <div className="flex items-center gap-2 text-primary">
-                <FileText className="size-6" />
-                <CardTitle className="text-2xl">Daftar Materi</CardTitle>
+                <FileText className="size-5" />
+                <CardTitle>Daftar Materi</CardTitle>
               </div>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
@@ -1604,11 +1658,11 @@ export default function Admin() {
                       key={m.id}
                       className="border-border/60 flex items-center justify-between gap-3 rounded-xl border px-4 py-3 transition-all duration-200 hover:border-primary/40 hover:shadow-md"
                     >
-                      <div className="flex items-center gap-3">
+                      <div className="flex min-w-0 items-center gap-3">
                         <span className="bg-secondary text-primary flex size-9 shrink-0 items-center justify-center rounded-full">
                           <FileText className="size-4" />
                         </span>
-                        <div>
+                        <div className="min-w-0 break-words">
                           <strong className="font-bold">{m.title}</strong>
                           {m.file_name && (
                             <span className="text-muted-foreground">
@@ -1636,18 +1690,26 @@ export default function Admin() {
                           </div>
                         </div>
                       </div>
-                      <div className="flex shrink-0 gap-2">
-                        <Button variant="outline" size="sm" onClick={() => startEditMaterial(m)}>
+                      <div className="flex shrink-0 gap-1.5">
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          className="size-8"
+                          aria-label={`Edit ${m.title}`}
+                          title="Edit"
+                          onClick={() => startEditMaterial(m)}
+                        >
                           <Pencil />
-                          Edit
                         </Button>
                         <Button
                           variant="destructive"
-                          size="sm"
+                          size="icon"
+                          className="size-8"
+                          aria-label={`Hapus ${m.title}`}
+                          title="Hapus"
                           onClick={() => void handleDeleteMaterial(m.id)}
                         >
                           <Trash2 />
-                          Hapus
                         </Button>
                       </div>
                     </div>
@@ -1662,8 +1724,8 @@ export default function Admin() {
           <Card>
             <CardHeader>
               <div className="flex items-center gap-2 text-primary">
-                <RefreshCw className="size-6" />
-                <CardTitle className="text-2xl">Paket Soal (Pool)</CardTitle>
+                <RefreshCw className="size-5" />
+                <CardTitle>Paket Soal (Pool)</CardTitle>
               </div>
               <CardDescription>
                 Buat batch paket soal lebih dulu agar siswa bisa mengambil soal tanpa menunggu —
@@ -1682,61 +1744,63 @@ export default function Admin() {
                   </AlertDescription>
                 </Alert>
               )}
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="r-subject">Mata Pelajaran</Label>
-                <Select value={resetSubject} onValueChange={setResetSubject}>
-                  <SelectTrigger id="r-subject">
-                    <SelectValue placeholder="Tidak ada materi tersedia" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {poolSubjects.map((s) => (
-                      <SelectItem key={s.id} value={s.id}>
-                        {s.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="r-grade">Kelas</Label>
-                <Select value={String(resetGrade)} onValueChange={(v) => setResetGrade(Number(v))}>
-                  <SelectTrigger id="r-grade">
-                    <SelectValue placeholder="Tidak ada materi tersedia" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {poolGrades.map((g) => (
-                      <SelectItem key={g} value={String(g)}>
-                        Kelas {g}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="r-exam-type">Tipe Ujian</Label>
-                <Select value={resetExamTypeId} onValueChange={setResetExamTypeId}>
-                  <SelectTrigger id="r-exam-type">
-                    <SelectValue placeholder="Tidak ada tipe ujian tersedia" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {poolExamTypes.map((t) => (
-                      <SelectItem key={t.id} value={t.id}>
-                        {t.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="gen-jumlah-paket">Jumlah Paket Soal (1–5)</Label>
-                <Input
-                  id="gen-jumlah-paket"
-                  type="number"
-                  min={1}
-                  max={5}
-                  value={genJumlahPaket}
-                  onChange={(e) => setGenJumlahPaket(Number(e.target.value))}
-                />
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="r-subject">Mata Pelajaran</Label>
+                  <Select value={resetSubject} onValueChange={setResetSubject}>
+                    <SelectTrigger id="r-subject">
+                      <SelectValue placeholder="Tidak ada materi tersedia" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {poolSubjects.map((s) => (
+                        <SelectItem key={s.id} value={s.id}>
+                          {s.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="r-grade">Kelas</Label>
+                  <Select value={String(resetGrade)} onValueChange={(v) => setResetGrade(Number(v))}>
+                    <SelectTrigger id="r-grade">
+                      <SelectValue placeholder="Tidak ada materi tersedia" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {poolGrades.map((g) => (
+                        <SelectItem key={g} value={String(g)}>
+                          Kelas {g}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="r-exam-type">Tipe Ujian</Label>
+                  <Select value={resetExamTypeId} onValueChange={setResetExamTypeId}>
+                    <SelectTrigger id="r-exam-type">
+                      <SelectValue placeholder="Tidak ada tipe ujian tersedia" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {poolExamTypes.map((t) => (
+                        <SelectItem key={t.id} value={t.id}>
+                          {t.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="gen-jumlah-paket">Jumlah Paket Soal (1–5)</Label>
+                  <Input
+                    id="gen-jumlah-paket"
+                    type="number"
+                    min={1}
+                    max={5}
+                    value={genJumlahPaket}
+                    onChange={(e) => setGenJumlahPaket(Number(e.target.value))}
+                  />
+                </div>
               </div>
               {resetError && (
                 <Alert variant="destructive">
@@ -1789,8 +1853,8 @@ export default function Admin() {
           <Card>
             <CardHeader>
               <div className="flex items-center gap-2 text-primary">
-                <Package className="size-6" />
-                <CardTitle className="text-2xl">Kelola Kuis (Paket Soal)</CardTitle>
+                <Package className="size-5" />
+                <CardTitle>Kelola Kuis (Paket Soal)</CardTitle>
               </div>
               <CardDescription>
                 Semua paket soal yang sudah di-generate, termasuk yang sudah dibuka
@@ -1800,7 +1864,7 @@ export default function Admin() {
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-<div className="flex flex-col gap-2">
+                <div className="flex flex-col gap-2">
                   <Label htmlFor="qm-subject">Mata Pelajaran</Label>
                   <Select value={qmSubject} onValueChange={setQmSubject}>
                     <SelectTrigger id="qm-subject">

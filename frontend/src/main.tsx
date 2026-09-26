@@ -73,7 +73,9 @@ function Shell() {
           "w-full",
           !isHome && !isQuiz && !isAdmin && "mx-auto max-w-3xl px-4 py-6",
           isQuiz && "mx-auto max-w-5xl px-4 py-6",
-          isAdmin && "mx-auto max-w-4xl px-4 py-6"
+          // Padding sama dengan header; max-w-6xl ada di dalam Admin supaya
+          // tepi konten sejajar dengan logo/menu.
+          isAdmin && "px-4 py-6 sm:px-10 lg:px-16"
         )}
       >
         {/* key per path: setiap pindah halaman konten masuk dengan fade-up */}
