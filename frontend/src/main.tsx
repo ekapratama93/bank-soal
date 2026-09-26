@@ -8,7 +8,7 @@ import {
   createBrowserRouter,
   useLocation,
 } from "react-router-dom";
-import { GraduationCap } from "lucide-react";
+import { GraduationCap, HistoryIcon, HouseIcon, Settings } from "lucide-react";
 import Home from "./pages/Home";
 import Quiz from "./pages/Quiz";
 import Result from "./pages/Result";
@@ -28,36 +28,46 @@ function Shell() {
 
   return (
     <>
-      <nav className="from-primary to-primary/80 sticky top-0 z-20 flex items-center justify-between gap-2 bg-gradient-to-r px-3 py-3 shadow-sm sm:px-6">
-        <Link
-          to="/"
-          className="group flex shrink-0 items-center gap-2 text-base font-extrabold whitespace-nowrap text-primary-foreground no-underline sm:text-lg"
-        >
-          <GraduationCap className="size-6 shrink-0 group-hover:animate-wiggle" />
-          Bank Soal
-        </Link>
-        <div className="flex gap-0.5 sm:gap-1">
-          {[
-            { to: "/", label: "Beranda", end: true },
-            { to: "/riwayat", label: "Riwayat", end: false },
-            { to: "/admin", label: "Admin", end: false },
-          ].map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.end}
-              className={({ isActive }) =>
-                cn(
-                  "rounded-full px-2 py-1.5 text-xs font-semibold whitespace-nowrap text-primary-foreground/80 no-underline transition-all duration-300 hover:bg-primary-foreground/10 hover:text-primary-foreground sm:px-3 sm:text-sm",
-                  isActive && "bg-primary-foreground/20 text-primary-foreground shadow-sm hover:bg-primary-foreground/20"
-                )
-              }
-            >
-              {item.label}
-            </NavLink>
-          ))}
-        </div>
-      </nav>
+      {/* Tinggi header tetap h-14: elemen sticky di Quiz/Result memakai
+          offset top-14 dst. yang bergantung pada tinggi ini. */}
+      {/* Padding + max-w sama dengan hero di Beranda supaya tepi logo/menu
+          sejajar dengan konten; dipakai sama persis di semua halaman. */}
+      <header className="border-border/60 bg-background/85 supports-[backdrop-filter]:bg-background/70 sticky top-0 z-20 h-14 border-b px-4 backdrop-blur-md sm:px-10 lg:px-16">
+        <nav className="mx-auto flex h-full max-w-6xl items-center justify-between gap-3">
+          <Link
+            to="/"
+            className="group text-foreground flex shrink-0 items-center gap-2.5 text-lg font-extrabold tracking-tight whitespace-nowrap no-underline"
+          >
+            <span className="bg-primary text-primary-foreground flex size-8 items-center justify-center rounded-lg shadow-sm">
+              <GraduationCap className="size-5 group-hover:animate-wiggle" />
+            </span>
+            Bank Soal
+          </Link>
+          <div className="border-border/60 bg-muted/70 flex items-center gap-1 rounded-full border p-1">
+            {[
+              { to: "/", label: "Beranda", icon: HouseIcon, end: true },
+              { to: "/riwayat", label: "Riwayat", icon: HistoryIcon, end: false },
+              { to: "/admin", label: "Admin", icon: Settings, end: false },
+            ].map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.end}
+                aria-label={item.label}
+                className={({ isActive }) =>
+                  cn(
+                    "text-muted-foreground hover:text-foreground flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-sm font-semibold whitespace-nowrap no-underline transition-colors duration-200 sm:px-3",
+                    isActive && "bg-card text-foreground shadow-sm"
+                  )
+                }
+              >
+                <item.icon className="size-4 shrink-0" />
+                <span className="hidden sm:inline">{item.label}</span>
+              </NavLink>
+            ))}
+          </div>
+        </nav>
+      </header>
       <main
         className={cn(
           "w-full",
