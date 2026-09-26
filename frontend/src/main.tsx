@@ -31,9 +31,9 @@ function Shell() {
       <nav className="from-primary to-primary/80 sticky top-0 z-20 flex items-center justify-between gap-2 bg-gradient-to-r px-3 py-3 shadow-sm sm:px-6">
         <Link
           to="/"
-          className="flex shrink-0 items-center gap-2 text-base font-extrabold whitespace-nowrap text-primary-foreground no-underline sm:text-lg"
+          className="group flex shrink-0 items-center gap-2 text-base font-extrabold whitespace-nowrap text-primary-foreground no-underline sm:text-lg"
         >
-          <GraduationCap className="size-6 shrink-0" />
+          <GraduationCap className="size-6 shrink-0 group-hover:animate-wiggle" />
           Bank Soal
         </Link>
         <div className="flex gap-0.5 sm:gap-1">
@@ -48,8 +48,8 @@ function Shell() {
               end={item.end}
               className={({ isActive }) =>
                 cn(
-                  "rounded-full px-2 py-1.5 text-xs font-semibold whitespace-nowrap text-primary-foreground/80 no-underline transition-colors hover:text-primary-foreground sm:px-3 sm:text-sm",
-                  isActive && "bg-primary-foreground/20 text-primary-foreground"
+                  "rounded-full px-2 py-1.5 text-xs font-semibold whitespace-nowrap text-primary-foreground/80 no-underline transition-all duration-300 hover:bg-primary-foreground/10 hover:text-primary-foreground sm:px-3 sm:text-sm",
+                  isActive && "bg-primary-foreground/20 text-primary-foreground shadow-sm hover:bg-primary-foreground/20"
                 )
               }
             >
@@ -66,7 +66,10 @@ function Shell() {
           isAdmin && "mx-auto max-w-4xl px-4 py-6"
         )}
       >
-        <Outlet />
+        {/* key per path: setiap pindah halaman konten masuk dengan fade-up */}
+        <div key={location.pathname} className="animate-fade-up">
+          <Outlet />
+        </div>
       </main>
     </>
   );

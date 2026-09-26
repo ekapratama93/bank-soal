@@ -25,12 +25,12 @@ function RadioGroupItem({
     <RadioGroupPrimitive.Item
       data-slot="radio-group-item"
       className={cn(
-        "border-input text-primary focus-visible:ring-ring/40 aspect-square size-4 shrink-0 rounded-full border shadow-sm outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-50",
+        "border-input text-primary focus-visible:ring-ring/40 data-[state=checked]:border-primary aspect-square size-4 shrink-0 rounded-full border shadow-sm outline-none transition-[border-color,box-shadow] duration-200 focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-50",
         className
       )}
       {...props}
     >
-      <RadioGroupPrimitive.Indicator className="relative flex items-center justify-center">
+      <RadioGroupPrimitive.Indicator className="animate-pop relative flex size-full items-center justify-center">
         <CircleIcon className="fill-primary absolute top-1/2 left-1/2 size-2 -translate-x-1/2 -translate-y-1/2" />
       </RadioGroupPrimitive.Indicator>
     </RadioGroupPrimitive.Item>

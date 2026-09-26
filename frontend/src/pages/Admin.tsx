@@ -68,6 +68,7 @@ import {
   FileText,
   Hash,
   Layers,
+  Loader2,
   ListChecks,
   LogOut,
   Package,
@@ -117,18 +118,23 @@ function StatCard({
   icon: Icon,
   label,
   value,
+  delay = 0,
 }: {
   icon: LucideIcon;
   label: string;
   value: number;
+  delay?: number;
 }) {
   return (
-    <div className="border-border/60 bg-card flex items-center gap-3 rounded-xl border px-4 py-3.5 shadow-sm">
-      <span className="bg-secondary text-primary flex size-10 shrink-0 items-center justify-center rounded-full">
+    <div
+      className="animate-fade-up group border-border/60 bg-card flex items-center gap-3 rounded-xl border px-4 py-3.5 shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:shadow-md"
+      style={{ animationDelay: `${delay}ms` }}
+    >
+      <span className="bg-secondary text-primary flex size-10 shrink-0 items-center justify-center rounded-full transition-transform duration-300 ease-(--ease-spring) group-hover:scale-110 group-hover:rotate-6">
         <Icon className="size-5" />
       </span>
       <div>
-        <div className="text-xl leading-none font-extrabold">{value}</div>
+        <div key={value} className="animate-pop text-xl leading-none font-extrabold">{value}</div>
         <div className="text-muted-foreground mt-1 text-xs font-semibold">{label}</div>
       </div>
     </div>
@@ -137,8 +143,8 @@ function StatCard({
 
 function EmptyState({ icon: Icon, text }: { icon: LucideIcon; text: string }) {
   return (
-    <div className="border-border flex flex-col items-center gap-2.5 rounded-xl border border-dashed py-10 text-center">
-      <span className="bg-muted text-muted-foreground flex size-11 items-center justify-center rounded-full">
+    <div className="animate-fade-in border-border flex flex-col items-center gap-2.5 rounded-xl border border-dashed py-10 text-center">
+      <span className="animate-float bg-muted text-muted-foreground flex size-11 items-center justify-center rounded-full">
         <Icon className="size-5" />
       </span>
       <p className="text-muted-foreground text-sm">{text}</p>
@@ -865,15 +871,18 @@ export default function Admin() {
       <div className="relative flex min-h-[65vh] items-center justify-center overflow-hidden px-4 py-10">
         <div
           aria-hidden
-          className="pointer-events-none absolute -top-32 -right-20 size-[380px] rounded-full opacity-70"
+          className="animate-blob pointer-events-none absolute -top-32 -right-20 size-[380px] rounded-full opacity-70"
           style={{
             background:
               "radial-gradient(circle at 30% 30%, var(--accent), transparent 70%)",
           }}
         />
-        <Card className="relative w-full max-w-sm">
+        <Card className="animate-scale-in relative w-full max-w-sm shadow-lg">
           <CardHeader>
-            <div className="bg-secondary text-primary mx-auto flex size-14 items-center justify-center rounded-2xl">
+            <div
+              className="animate-pop bg-secondary text-primary mx-auto flex size-14 items-center justify-center rounded-2xl"
+              style={{ animationDelay: "150ms" }}
+            >
               <ShieldCheck className="size-7" />
             </div>
             <CardTitle className="text-center text-2xl">Login Admin</CardTitle>
@@ -923,7 +932,7 @@ export default function Admin() {
     <div className="flex flex-col gap-5">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
-          <div className="bg-secondary text-primary flex size-12 shrink-0 items-center justify-center rounded-2xl">
+          <div className="animate-pop bg-secondary text-primary flex size-12 shrink-0 items-center justify-center rounded-2xl">
             <ShieldCheck className="size-6" />
           </div>
           <div>
@@ -947,8 +956,8 @@ export default function Admin() {
 
       <div className="grid grid-cols-3 gap-3">
         <StatCard icon={BookOpen} label="Mata Pelajaran" value={subjects.length} />
-        <StatCard icon={ListChecks} label="Tipe Ujian" value={examTypes.length} />
-        <StatCard icon={Layers} label="Materi" value={materials.length} />
+        <StatCard icon={ListChecks} label="Tipe Ujian" value={examTypes.length} delay={80} />
+        <StatCard icon={Layers} label="Materi" value={materials.length} delay={160} />
       </div>
 
       <Tabs defaultValue="subjects">
@@ -1022,7 +1031,7 @@ export default function Admin() {
                   {subjects.map((s) => (
                     <div
                       key={s.id}
-                      className="border-border/60 flex items-center justify-between gap-3 rounded-xl border px-4 py-3"
+                      className="border-border/60 flex items-center justify-between gap-3 rounded-xl border px-4 py-3 transition-all duration-200 hover:border-primary/40 hover:shadow-md"
                     >
                       <div className="flex min-w-0 items-center gap-3">
                         <span className="bg-secondary text-primary flex size-9 shrink-0 items-center justify-center rounded-full">
@@ -1234,7 +1243,7 @@ export default function Admin() {
                       <form
                         key={t.id}
                         onSubmit={handleSaveExamTypeEdit}
-                        className="border-border/60 flex flex-col gap-3 rounded-xl border px-4 py-3.5"
+                        className="border-border/60 flex flex-col gap-3 rounded-xl border px-4 py-3.5 transition-all duration-200 hover:border-primary/40 hover:shadow-md"
                       >
                         <div className="flex flex-col gap-2">
                           <Label htmlFor={`ete-name-${t.id}`}>Nama Tipe Ujian</Label>
@@ -1358,7 +1367,7 @@ export default function Admin() {
                     ) : (
                       <div
                         key={t.id}
-                        className="border-border/60 flex items-center justify-between gap-3 rounded-xl border px-4 py-3"
+                        className="border-border/60 flex items-center justify-between gap-3 rounded-xl border px-4 py-3 transition-all duration-200 hover:border-primary/40 hover:shadow-md"
                       >
                         <div className="flex items-center gap-3">
                           <span className="bg-secondary text-primary flex size-9 shrink-0 items-center justify-center rounded-full">
@@ -1557,7 +1566,7 @@ export default function Admin() {
                   editingId === m.id ? (
                     <div
                       key={m.id}
-                      className="border-border/60 flex flex-col gap-3 rounded-xl border px-4 py-3.5"
+                      className="border-border/60 flex flex-col gap-3 rounded-xl border px-4 py-3.5 transition-all duration-200 hover:border-primary/40 hover:shadow-md"
                     >
                       <div className="flex flex-col gap-2">
                         <Label htmlFor={`e-title-${m.id}`}>Judul</Label>
@@ -1593,7 +1602,7 @@ export default function Admin() {
                   ) : (
                     <div
                       key={m.id}
-                      className="border-border/60 flex items-center justify-between gap-3 rounded-xl border px-4 py-3"
+                      className="border-border/60 flex items-center justify-between gap-3 rounded-xl border px-4 py-3 transition-all duration-200 hover:border-primary/40 hover:shadow-md"
                     >
                       <div className="flex items-center gap-3">
                         <span className="bg-secondary text-primary flex size-9 shrink-0 items-center justify-center rounded-full">
@@ -1919,7 +1928,7 @@ export default function Admin() {
                 <div className="flex flex-col gap-2">
                   {quizzes.map((q) => (
                     <div key={q.id} className="flex flex-col gap-2">
-                      <div className="border-border/60 flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3">
+                      <div className="border-border/60 flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3 transition-all duration-200 hover:border-primary/40 hover:shadow-md">
                         <div className="flex min-w-0 items-center gap-3">
                           <input
                             type="checkbox"
@@ -1977,9 +1986,12 @@ export default function Admin() {
                         </div>
                       </div>
                       {detailId === q.id && (
-                        <div className="flex flex-col gap-2 rounded-xl border border-dashed px-4 py-3.5">
+                        <div className="animate-fade-down flex flex-col gap-2 rounded-xl border border-dashed px-4 py-3.5">
                           {detailLoading && (
-                            <p className="text-muted-foreground text-sm">Memuat detail…</p>
+                            <p className="text-muted-foreground flex items-center gap-2 text-sm">
+                              <Loader2 className="size-4 animate-spin" />
+                              Memuat detail…
+                            </p>
                           )}
                           {detailError && (
                             <Alert variant="destructive">

@@ -7,6 +7,7 @@ import {
   History,
   Layers,
   ListChecks,
+  Loader2,
   Sparkles,
 } from "lucide-react";
 import {
@@ -23,6 +24,7 @@ import { getServedIds } from "../storage/results";
 import { getActiveDraft, type QuizDraft } from "../storage/quizDraft";
 import { GRADES } from "../subjects";
 import { applySeo } from "../lib/seo";
+import { Reveal } from "../components/Reveal";
 import {
   Card,
   CardContent,
@@ -192,7 +194,7 @@ export default function Home() {
       <section className="relative overflow-hidden px-6 py-16 sm:px-10 sm:py-20 lg:px-16">
         <div
           aria-hidden
-          className="pointer-events-none absolute -top-40 -right-32 size-[520px] rounded-full opacity-70"
+          className="animate-blob pointer-events-none absolute -top-40 -right-32 size-[520px] rounded-full opacity-70"
           style={{
             background:
               "radial-gradient(circle at 30% 30%, var(--accent), transparent 70%)",
@@ -200,19 +202,28 @@ export default function Home() {
         />
         <div className="relative mx-auto grid max-w-6xl items-center gap-10 lg:grid-cols-[1fr_440px] lg:gap-14">
           <div>
-            <span className="bg-secondary text-secondary-foreground inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-extrabold tracking-wide">
-              <Sparkles className="size-3.5" />
+            <span className="animate-fade-up bg-secondary text-secondary-foreground inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-extrabold tracking-wide">
+              <Sparkles className="size-3.5 animate-pulse" />
               Dibantu AI &middot; Bahasa Indonesia
             </span>
-            <h1 className="mt-5 text-4xl leading-tight font-extrabold tracking-tight text-balance sm:text-5xl">
+            <h1
+              className="animate-fade-up mt-5 text-4xl leading-tight font-extrabold tracking-tight text-balance sm:text-5xl"
+              style={{ animationDelay: "90ms" }}
+            >
               Latihan soal yang pas untuk kelas dan mapelmu
             </h1>
-            <p className="text-muted-foreground mt-5 max-w-[42ch] text-lg leading-relaxed">
+            <p
+              className="animate-fade-up text-muted-foreground mt-5 max-w-[42ch] text-lg leading-relaxed"
+              style={{ animationDelay: "180ms" }}
+            >
               Pilih mata pelajaran, kelas, dan tipe ujian — dapatkan paket
               soal campuran (pilihan ganda, benar/salah, isian, uraian) lengkap
               dengan timer dan nilai otomatis begitu selesai.
             </p>
-            <div className="mt-8 flex flex-wrap items-center gap-3">
+            <div
+              className="animate-fade-up mt-8 flex flex-wrap items-center gap-3"
+              style={{ animationDelay: "270ms" }}
+            >
               <Button size="lg" asChild>
                 <a href="#mulai">
                   <Sparkles className="size-4" />
@@ -223,14 +234,20 @@ export default function Home() {
                 <a href="#cara-kerja">Lihat cara kerja</a>
               </Button>
             </div>
-            <p className="text-muted-foreground mt-4 text-sm">
+            <p
+              className="animate-fade-in text-muted-foreground mt-4 text-sm"
+              style={{ animationDelay: "400ms" }}
+            >
               Langsung dari HP atau laptop, tanpa perlu login.
             </p>
           </div>
 
           {/* Ilustrasi */}
-          <div className="relative mx-auto h-[380px] w-full max-w-[420px] sm:h-[420px]">
-            <div className="border-border/60 bg-card absolute top-6 left-0 w-[230px] -rotate-6 rounded-xl border p-5 shadow-sm sm:w-[250px]">
+          <div
+            className="animate-scale-in relative mx-auto h-[380px] w-full max-w-[420px] sm:h-[420px]"
+            style={{ animationDelay: "200ms", animationDuration: "700ms" }}
+          >
+            <div className="animate-float border-border/60 bg-card absolute top-6 left-0 w-[230px] -rotate-6 rounded-xl border p-5 shadow-sm sm:w-[250px]">
               <div className="bg-muted h-2.5 w-3/4 rounded-full" />
               <div className="bg-muted mt-2 h-2.5 w-2/5 rounded-full" />
               <div className="mt-4 flex flex-col gap-2">
@@ -251,7 +268,10 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="border-border/60 bg-card absolute right-0 bottom-0 w-[250px] rotate-3 rounded-xl border p-5 shadow-md sm:w-[270px]">
+            <div
+              className="animate-float border-border/60 bg-card absolute right-0 bottom-0 w-[250px] rotate-3 rounded-xl border p-5 shadow-md sm:w-[270px]"
+              style={{ animationDuration: "7s", animationDelay: "-3s" }}
+            >
               <div className="flex flex-wrap gap-1.5">
                 <span className="border-border rounded-full border px-2.5 py-1 text-[11px] font-bold">
                   Pilihan Ganda
@@ -278,9 +298,12 @@ export default function Home() {
                     stroke="var(--primary)"
                     strokeWidth="7"
                     strokeLinecap="round"
-                    strokeDasharray="201.06"
-                    strokeDashoffset="64.3"
+                    pathLength={100}
+                    strokeDasharray="100"
+                    strokeDashoffset="32"
                     transform="rotate(-90 38 38)"
+                    className="animate-ring-fill"
+                    style={{ animationDelay: "600ms" }}
                   />
                   <text
                     x="38"
@@ -322,18 +345,18 @@ export default function Home() {
 
       {/* Cara kerja */}
       <section id="cara-kerja" className="scroll-mt-20 px-6 py-16 sm:px-10 lg:px-16">
-        <div className="mx-auto max-w-5xl text-center">
+        <Reveal className="mx-auto max-w-5xl text-center">
           <p className="text-primary text-xs font-extrabold tracking-wider uppercase">
             Cara kerja
           </p>
           <h2 className="mt-2 text-3xl font-extrabold">
             Tiga langkah, langsung mulai
           </h2>
-        </div>
+        </Reveal>
         <div className="mx-auto mt-10 grid max-w-5xl gap-8 sm:grid-cols-3">
-          {STEPS.map((step) => (
-            <div key={step.title} className="text-center">
-              <div className="bg-secondary text-primary mx-auto flex size-14 items-center justify-center rounded-xl">
+          {STEPS.map((step, i) => (
+            <Reveal key={step.title} delay={i * 120} className="group text-center">
+              <div className="bg-secondary text-primary mx-auto flex size-14 items-center justify-center rounded-xl transition-transform duration-300 ease-(--ease-spring) group-hover:-translate-y-1 group-hover:rotate-6">
                 <step.icon className="size-6" />
               </div>
               <div className="text-primary mt-4 text-xs font-extrabold tracking-wider uppercase">
@@ -343,45 +366,46 @@ export default function Home() {
               <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
                 {step.desc}
               </p>
-            </div>
+            </Reveal>
           ))}
         </div>
       </section>
 
       {/* Fitur */}
       <section className="border-border/60 bg-card border-y px-6 py-16 sm:px-10 lg:px-16">
-        <div className="mx-auto max-w-5xl text-center">
+        <Reveal className="mx-auto max-w-5xl text-center">
           <h2 className="text-3xl font-extrabold">Kenapa latihan di sini</h2>
-        </div>
+        </Reveal>
         <div className="mx-auto mt-10 grid max-w-5xl gap-5 sm:grid-cols-2 lg:grid-cols-4">
-          {FEATURES.map((feature) => (
-            <div
+          {FEATURES.map((feature, i) => (
+            <Reveal
               key={feature.title}
-              className="border-border/60 rounded-xl border p-6 shadow-sm"
+              delay={i * 90}
+              className="group border-border/60 hover:border-primary/40 rounded-xl border p-6 shadow-sm transition-[border-color,box-shadow,translate] duration-300 hover:-translate-y-1 hover:shadow-lg"
             >
-              <feature.icon className="text-primary size-6" />
+              <feature.icon className="text-primary size-6 transition-transform duration-300 ease-(--ease-spring) group-hover:scale-125" />
               <div className="mt-3.5 text-base font-extrabold">{feature.title}</div>
               <p className="text-muted-foreground mt-1.5 text-sm leading-relaxed">
                 {feature.desc}
               </p>
-            </div>
+            </Reveal>
           ))}
         </div>
       </section>
 
       {/* Mulai / form */}
       <section id="mulai" className="scroll-mt-20 px-4 py-16 sm:px-6">
-        <div className="mx-auto max-w-2xl text-center">
+        <Reveal className="mx-auto max-w-2xl text-center">
           <p className="text-primary text-xs font-extrabold tracking-wider uppercase">
             Mulai sekarang
           </p>
           <h2 className="mt-2 text-2xl font-extrabold sm:text-3xl">
             Pilih paketmu, mulai latihan
           </h2>
-        </div>
+        </Reveal>
 
         {resume && (
-          <Card className="border-primary/40 mx-auto mt-8 max-w-2xl">
+          <Card className="animate-scale-in border-primary/40 mx-auto mt-8 max-w-2xl">
             <CardContent className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <div className="text-sm font-extrabold">
@@ -409,7 +433,8 @@ export default function Home() {
           </Card>
         )}
 
-        <Card className="mx-auto mt-8 max-w-2xl">
+        <Reveal delay={100}>
+        <Card className="mx-auto mt-8 max-w-2xl transition-shadow duration-300 hover:shadow-lg">
           <CardHeader>
             <div className="flex items-center gap-2 text-primary">
               <BookOpen className="size-6" />
@@ -503,16 +528,21 @@ export default function Home() {
                 grade === null
               }
             >
-              <Sparkles className="size-4" />
+              {loading ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Sparkles className="size-4" />
+              )}
               {loading ? "Mengambil paket soal…" : "Ambil Soal"}
             </Button>
             {loading && (
-              <p className="text-muted-foreground text-sm">
+              <p className="animate-fade-in text-muted-foreground text-sm">
                 Memuat paket soal, mohon tunggu.
               </p>
             )}
           </CardContent>
         </Card>
+        </Reveal>
       </section>
 
       {/* Footer */}

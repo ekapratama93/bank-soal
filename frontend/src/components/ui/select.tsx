@@ -49,6 +49,7 @@ function SelectContent({
         data-slot="select-content"
         className={cn(
           "bg-popover text-popover-foreground relative z-50 max-h-96 min-w-[8rem] overflow-hidden rounded-lg border shadow-md",
+          "origin-(--radix-select-content-transform-origin) data-[state=open]:animate-scale-in",
           position === "popper" &&
             "data-[side=bottom]:translate-y-1 data-[side=top]:-translate-y-1",
           className

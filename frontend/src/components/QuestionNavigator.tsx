@@ -27,16 +27,16 @@ export function NavigatorGrid({
             type="button"
             onClick={() => onSelect(i)}
             className={cn(
-              "relative h-9 rounded-md border text-sm font-extrabold transition-colors",
+              "relative h-9 rounded-md border text-sm font-extrabold transition-all duration-200 hover:scale-105 active:scale-95",
               item.className,
-              isCurrent && "ring-primary ring-offset-background ring-2 ring-offset-2"
+              isCurrent && "ring-primary ring-offset-background scale-105 ring-2 ring-offset-2"
             )}
           >
             {i + 1}
             {item.dot && (
               <span
                 className={cn(
-                  "border-card absolute -top-1 -right-1 size-2 rounded-full border",
+                  "animate-pop border-card absolute -top-1 -right-1 size-2 rounded-full border",
                   item.dotClassName ?? "bg-warning"
                 )}
               />

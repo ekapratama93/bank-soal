@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 import {
   Check,
@@ -21,7 +21,9 @@ import MathText from "@/components/MathText";
 import QuestionImage from "@/components/QuestionImage";
 import { NavigatorGrid, NavigatorLegend, type NavigatorItem } from "@/components/QuestionNavigator";
 import { cn } from "@/lib/utils";
-import { SCORE_MESSAGE, SCORE_RING_CLASS, scoreLevel } from "@/lib/score";
+import { SCORE_MESSAGE, SCORE_RING_CLASS, scoreLevel, type ScoreLevel } from "@/lib/score";
+import { useCountUp } from "@/lib/useCountUp";
+import { Skeleton } from "@/components/ui/skeleton";
 import { QUESTION_TYPE_LABELS } from "@/lib/questionTypes";
 import { applySeo } from "../lib/seo";
 import type { PerQuestionResult, Verdict } from "@/api/client";
@@ -55,6 +57,62 @@ const VERDICT_DOT_CLASS: Record<string, string> = {
   parsial: "bg-warning text-warning-foreground",
   salah: "bg-destructive text-destructive-foreground",
 };
+
+const CONFETTI_COLORS = ["bg-primary", "bg-warning", "bg-success", "bg-accent"];
+
+/** Cincin nilai: busur terisi sampai nilai, angka menghitung naik. */
+function ScoreRing({ nilai, level }: { nilai: number; level: ScoreLevel }) {
+  const shown = useCountUp(nilai, 1100);
+  const pct = Math.max(0, Math.min(100, nilai));
+
+  return (
+    <div className={cn("animate-pop relative size-32", SCORE_RING_CLASS[level])}>
+      {level === "high" &&
+        Array.from({ length: 14 }, (_, i) => {
+          const angle = (i / 14) * Math.PI * 2;
+          const dist = 80 + (i % 3) * 14;
+          return (
+            <span
+              key={i}
+              aria-hidden
+              className={cn(
+                "animate-burst absolute top-1/2 left-1/2 -mt-1 -ml-1 size-2",
+                i % 2 ? "rounded-sm" : "rounded-full",
+                CONFETTI_COLORS[i % CONFETTI_COLORS.length]
+              )}
+              style={
+                {
+                  "--tx": `${Math.cos(angle) * dist}px`,
+                  "--ty": `${Math.sin(angle) * dist}px`,
+                  animationDelay: `${900 + (i % 4) * 40}ms`,
+                } as CSSProperties
+              }
+            />
+          );
+        })}
+      <svg viewBox="0 0 128 128" className="size-full -rotate-90">
+        <circle cx="64" cy="64" r="56" fill="none" stroke="var(--muted)" strokeWidth="10" />
+        <circle
+          cx="64"
+          cy="64"
+          r="56"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="10"
+          strokeLinecap="round"
+          pathLength={100}
+          strokeDasharray="100"
+          strokeDashoffset={100 - pct}
+          className="animate-ring-fill"
+          style={{ animationDelay: "150ms" }}
+        />
+      </svg>
+      <span className="absolute inset-0 flex items-center justify-center text-4xl font-extrabold tabular-nums">
+        {shown}
+      </span>
+    </div>
+  );
+}
 
 function VerdictDot({ verdict }: { verdict: Verdict }) {
   const Icon = VERDICT_ICON[verdict];
@@ -174,8 +232,13 @@ export default function Result() {
   const result = fresh ?? attempt;
   if (!result)
     return (
-      <Card>
-        <CardContent className="text-muted-foreground">Memuat hasil…</CardContent>
+      <Card aria-label="Memuat hasil…">
+        <CardContent className="flex flex-col items-center gap-3">
+          <span className="sr-only">Memuat hasil…</span>
+          <Skeleton className="size-32 rounded-full" />
+          <Skeleton className="h-4 w-40" />
+          <Skeleton className="h-4 w-56" />
+        </CardContent>
       </Card>
     );
 
@@ -207,16 +270,19 @@ export default function Result() {
           </p>
         </CardHeader>
         <CardContent className="flex flex-col items-center gap-2">
-          <div
-            className={cn(
-              "flex size-32 items-center justify-center rounded-full border-8 text-4xl font-extrabold",
-              SCORE_RING_CLASS[level]
-            )}
+          <ScoreRing nilai={result.nilai} level={level} />
+          <p
+            className="animate-fade-in text-muted-foreground text-xs"
+            style={{ animationDelay: "500ms" }}
           >
-            {result.nilai}
-          </div>
-          <p className="text-muted-foreground text-xs">Nilai (skala 0–100)</p>
-          <p className="text-center text-sm font-semibold">{SCORE_MESSAGE[level]}</p>
+            Nilai (skala 0–100)
+          </p>
+          <p
+            className="animate-fade-up text-center text-sm font-semibold"
+            style={{ animationDelay: "900ms" }}
+          >
+            {SCORE_MESSAGE[level]}
+          </p>
         </CardContent>
       </Card>
 
@@ -235,17 +301,19 @@ export default function Result() {
               <LayoutGrid />
             </Button>
             {navOpen && (
-              <Card className="mt-2 gap-3 p-4">
+              <Card className="animate-scale-in mt-2 origin-top gap-3 p-4">
                 <NavigatorGrid items={navItems} current={current} onSelect={goTo} />
                 <NavigatorLegend items={NAV_LEGEND} />
               </Card>
             )}
           </div>
 
-          <Card>
+          <Card key={current} className="animate-fade-up">
             <CardHeader>
               <div className="flex items-center gap-2">
-                <Badge variant="secondary">Soal {pq.nomor}</Badge>
+                <Badge variant="secondary" className="animate-pop">
+                  Soal {pq.nomor}
+                </Badge>
                 <span className="text-muted-foreground text-xs font-semibold">
                   {QUESTION_TYPE_LABELS[pq.tipe]}
                 </span>
@@ -342,7 +410,7 @@ export default function Result() {
           </div>
         </div>
 
-        <Card className="top-16 hidden w-72 shrink-0 gap-4 p-5 lg:sticky lg:flex lg:max-h-[calc(100vh-5rem)] lg:flex-col lg:overflow-auto">
+        <Card className="animate-fade-in top-16 hidden w-72 shrink-0 gap-4 p-5 lg:sticky lg:flex lg:max-h-[calc(100vh-5rem)] lg:flex-col lg:overflow-auto">
           <div className="text-sm font-extrabold">Navigasi Soal</div>
           <NavigatorGrid items={navItems} current={current} onSelect={goTo} />
           <NavigatorLegend items={NAV_LEGEND} />

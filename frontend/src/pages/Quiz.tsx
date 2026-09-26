@@ -7,6 +7,7 @@ import {
   Clock,
   Flag,
   LayoutGrid,
+  Loader2,
   Save,
 } from "lucide-react";
 import { ApiError, getQuiz, type QuestionPublic } from "../api/client";
@@ -32,6 +33,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
 import MathText from "@/components/MathText";
 import QuestionImage from "@/components/QuestionImage";
 import { NavigatorGrid, NavigatorLegend, type NavigatorItem } from "@/components/QuestionNavigator";
@@ -99,6 +101,13 @@ export default function Quiz() {
   const expiredFiredRef = useRef(false);
   const pendingDraftRef = useRef<QuizDraft | null>(null);
   const lastSavedAtRef = useRef(0);
+  // Arah perpindahan soal, untuk animasi geser kiri/kanan.
+  const prevCurrentRef = useRef(current);
+  const slideDirRef = useRef<"next" | "prev">("next");
+  if (current !== prevCurrentRef.current) {
+    slideDirRef.current = current > prevCurrentRef.current ? "next" : "prev";
+    prevCurrentRef.current = current;
+  }
 
   // Selama pengumpulan berjalan, jawaban tidak boleh diubah lagi.
   const busy = submitStatus === "submitting" || submitStatus === "done";
@@ -418,7 +427,20 @@ export default function Quiz() {
     return (
       <Card>
         <CardContent className="flex flex-col gap-3">
-          <p className="text-muted-foreground">Memuat soal…</p>
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" />
+            <p>Memuat soal…</p>
+          </div>
+          <Skeleton className="h-5 w-3/4" />
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {[0, 1, 2, 3].map((i) => (
+              <Skeleton
+                key={i}
+                className="h-11 rounded-lg"
+                style={{ animationDelay: `${i * 120}ms` }}
+              />
+            ))}
+          </div>
           {offline && (
             <Alert variant="warning">
               <AlertTriangle />
@@ -482,7 +504,7 @@ export default function Quiz() {
             </div>
             <Badge
               variant={isWarning ? "destructive" : "secondary"}
-              className={cn(isWarning && "animate-pulse")}
+              className={cn("transition-colors duration-500", isWarning && "animate-pulse")}
             >
               <Clock />
               {formatTime(remaining)}
@@ -498,10 +520,10 @@ export default function Quiz() {
       </Card>
 
       {blocker.state === "blocked" && (
-        <Card className="border-warning">
+        <Card className="animate-scale-in border-warning">
           <CardContent className="flex flex-col gap-3">
             <div className="flex items-center gap-2 font-extrabold">
-              <AlertTriangle className="text-warning" />
+              <AlertTriangle className="text-warning animate-wiggle" />
               Ujian masih berjalan
             </div>
             <p className="text-muted-foreground text-sm">
@@ -612,17 +634,26 @@ export default function Quiz() {
                 <LayoutGrid />
               </Button>
               {navOpen && (
-                <Card className="mt-2 gap-3 p-4">
+                <Card className="animate-scale-in mt-2 origin-top gap-3 p-4">
                   <NavigatorGrid items={navItems} current={current} onSelect={goTo} />
                   <NavigatorLegend items={NAV_LEGEND} />
                 </Card>
               )}
             </div>
 
-            <Card>
+            <Card
+              key={current}
+              className={
+                slideDirRef.current === "next"
+                  ? "animate-slide-in-right"
+                  : "animate-slide-in-left"
+              }
+            >
               <CardHeader>
                 <div className="flex items-center gap-2">
-                  <Badge variant="secondary">Soal {current + 1}</Badge>
+                  <Badge variant="secondary" className="animate-pop">
+                    Soal {current + 1}
+                  </Badge>
                   <span className="text-muted-foreground text-xs font-semibold">
                     {QUESTION_TYPE_LABELS[q.tipe]}
                   </span>
@@ -652,11 +683,12 @@ export default function Quiz() {
                           key={oi}
                           htmlFor={`q-${current}-${oi}`}
                           className={cn(
-                            "flex cursor-pointer items-center gap-3 rounded-lg border px-3.5 py-2.5 font-normal shadow-sm transition-colors",
+                            "animate-fade-up flex cursor-pointer items-center gap-3 rounded-lg border px-3.5 py-2.5 font-normal shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md",
                             selected
-                              ? "border-primary bg-accent"
-                              : "border-input hover:bg-accent/50"
+                              ? "border-primary bg-accent ring-primary/20 scale-[1.01] shadow-md ring-2"
+                              : "border-input hover:border-primary/40 hover:bg-accent/50"
                           )}
+                          style={{ animationDelay: `${100 + oi * 60}ms` }}
                         >
                           <RadioGroupItem
                             value={String(oi)}
@@ -681,18 +713,19 @@ export default function Quiz() {
                     }
                     className="grid grid-cols-1 gap-3 sm:grid-cols-2"
                   >
-                    {(["benar", "salah"] as const).map((v) => {
+                    {(["benar", "salah"] as const).map((v, vi) => {
                       const selected = answers[String(current)] === v;
                       return (
                         <Label
                           key={v}
                           htmlFor={`q-${current}-${v}`}
                           className={cn(
-                            "flex cursor-pointer items-center justify-center gap-3 rounded-lg border px-3.5 py-4 font-bold shadow-sm transition-colors",
+                            "animate-fade-up flex cursor-pointer items-center justify-center gap-3 rounded-lg border px-3.5 py-4 font-bold shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md",
                             selected
-                              ? "border-primary bg-accent"
-                              : "border-input hover:bg-accent/50"
+                              ? "border-primary bg-accent ring-primary/20 scale-[1.01] shadow-md ring-2"
+                              : "border-input hover:border-primary/40 hover:bg-accent/50"
                           )}
+                          style={{ animationDelay: `${100 + vi * 60}ms` }}
                         >
                           <RadioGroupItem
                             value={v}
@@ -751,7 +784,7 @@ export default function Quiz() {
                   currentFlagged && "border-warning bg-warning/10 text-warning-foreground"
                 )}
               >
-                <Flag className={cn(currentFlagged && "fill-warning")} />
+                <Flag className={cn("transition-transform duration-300", currentFlagged && "fill-warning animate-pop -rotate-12")} />
                 {currentFlagged ? "Ditandai" : "Tandai"}
               </Button>
               <Button onClick={() => (isLast ? setPhase("review") : goNext())}>
@@ -761,7 +794,7 @@ export default function Quiz() {
             </div>
           </div>
 
-          <Card className="top-28 hidden w-72 shrink-0 gap-4 p-5 lg:sticky lg:flex lg:max-h-[calc(100vh-7rem)] lg:flex-col lg:overflow-auto">
+          <Card className="animate-fade-in top-28 hidden w-72 shrink-0 gap-4 p-5 lg:sticky lg:flex lg:max-h-[calc(100vh-7rem)] lg:flex-col lg:overflow-auto">
             <div className="text-sm font-extrabold">Navigasi Soal</div>
             <NavigatorGrid items={navItems} current={current} onSelect={goTo} />
             <NavigatorLegend items={NAV_LEGEND} />
@@ -780,7 +813,7 @@ export default function Quiz() {
       )}
 
       {phase === "review" && (
-        <div className="flex flex-col gap-4">
+        <div className="animate-fade-up flex flex-col gap-4">
           <div>
             <h2 className="text-lg font-extrabold">Tinjau Jawaban Kamu</h2>
             <p className="text-muted-foreground text-sm">
@@ -806,7 +839,8 @@ export default function Quiz() {
                   key={qq.nomor}
                   type="button"
                   onClick={() => goTo(i)}
-                  className="hover:bg-muted flex w-full items-center gap-3 border-b px-4 py-3 text-left last:border-b-0"
+                  className="animate-fade-up hover:bg-muted group flex w-full items-center gap-3 border-b px-4 py-3 text-left transition-colors last:border-b-0"
+                  style={{ animationDelay: `${Math.min(i, 15) * 35}ms` }}
                 >
                   <Badge variant={answered ? "default" : "secondary"}>{i + 1}</Badge>
                   <span className="flex-1 truncate text-sm font-semibold">
@@ -836,6 +870,7 @@ export default function Quiz() {
               Kembali ke Soal
             </Button>
             <Button onClick={submitNow} disabled={busy}>
+              {submitStatus === "submitting" && <Loader2 className="animate-spin" />}
               {submitStatus === "submitting"
                 ? "Mengumpulkan…"
                 : submitStatus === "gave_up"

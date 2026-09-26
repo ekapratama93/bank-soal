@@ -5,6 +5,7 @@ import { getAttempts, type AttemptResult } from "../api/client";
 import { formatDate } from "../storage/results";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { SCORE_RING_CLASS, scoreLevel } from "@/lib/score";
 import { applySeo } from "../lib/seo";
@@ -40,8 +41,20 @@ export default function History() {
 
   if (attempts === null) {
     return (
-      <Card>
-        <CardContent className="text-muted-foreground">Memuat riwayat…</CardContent>
+      <Card className="gap-0 overflow-hidden py-0" aria-label="Memuat riwayat…">
+        <span className="sr-only">Memuat riwayat…</span>
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="flex items-center gap-3 border-b px-4 py-3 last:border-b-0">
+            <Skeleton
+              className="size-10 shrink-0 rounded-full"
+              style={{ animationDelay: `${i * 150}ms` }}
+            />
+            <div className="flex flex-1 flex-col gap-2">
+              <Skeleton className="h-4 w-1/2" style={{ animationDelay: `${i * 150}ms` }} />
+              <Skeleton className="h-3 w-1/3" style={{ animationDelay: `${i * 150}ms` }} />
+            </div>
+          </div>
+        ))}
       </Card>
     );
   }
@@ -70,17 +83,18 @@ export default function History() {
         </CardHeader>
       </Card>
       <Card className="gap-0 overflow-hidden py-0">
-        {attempts.map((a) => {
+        {attempts.map((a, i) => {
           const level = scoreLevel(a.nilai);
           return (
             <Link
               key={a.quiz_id}
               to={`/result/${a.quiz_id}`}
-              className="hover:bg-muted flex items-center gap-3 border-b px-4 py-3 no-underline last:border-b-0"
+              className="animate-fade-up group hover:bg-muted flex items-center gap-3 border-b px-4 py-3 no-underline transition-colors duration-200 last:border-b-0"
+              style={{ animationDelay: `${Math.min(i, 12) * 50}ms` }}
             >
               <div
                 className={cn(
-                  "flex size-10 shrink-0 items-center justify-center rounded-full border-4 text-sm font-extrabold",
+                  "flex size-10 shrink-0 items-center justify-center rounded-full border-4 text-sm font-extrabold transition-transform duration-300 ease-(--ease-spring) group-hover:scale-110",
                   SCORE_RING_CLASS[level]
                 )}
               >
@@ -98,7 +112,7 @@ export default function History() {
                   {a.expired && " · lewat waktu"}
                 </span>
               </div>
-              <ChevronRight className="text-muted-foreground shrink-0" />
+              <ChevronRight className="text-muted-foreground group-hover:text-primary shrink-0 transition-all duration-200 group-hover:translate-x-1" />
             </Link>
           );
         })}
