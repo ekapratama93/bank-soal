@@ -8,13 +8,15 @@ import {
   createBrowserRouter,
   useLocation,
 } from "react-router-dom";
-import { GraduationCap, HistoryIcon, HouseIcon, Settings } from "lucide-react";
+import { GraduationCap, HistoryIcon, HouseIcon, LogOut, Settings } from "lucide-react";
 import Home from "./pages/Home";
 import Quiz from "./pages/Quiz";
 import Result from "./pages/Result";
 import History from "./pages/History";
 import Admin from "./pages/Admin";
 import { cn } from "@/lib/utils";
+import { clearAdminToken, useAdminToken } from "@/lib/adminAuth";
+import { Button } from "@/components/ui/button";
 import "katex/dist/katex.min.css";
 import "./index.css";
 
@@ -25,6 +27,7 @@ function Shell() {
   const isHome = location.pathname === "/";
   const isQuiz = location.pathname.startsWith("/quiz/");
   const isAdmin = location.pathname.startsWith("/admin");
+  const adminToken = useAdminToken();
 
   return (
     <>
@@ -43,28 +46,43 @@ function Shell() {
             </span>
             Bank Soal
           </Link>
-          <div className="border-border/60 bg-muted/70 flex items-center gap-1 rounded-full border p-1">
-            {[
-              { to: "/", label: "Beranda", icon: HouseIcon, end: true },
-              { to: "/riwayat", label: "Riwayat", icon: HistoryIcon, end: false },
-              { to: "/admin", label: "Admin", icon: Settings, end: false },
-            ].map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.end}
-                aria-label={item.label}
-                className={({ isActive }) =>
-                  cn(
-                    "text-muted-foreground hover:text-foreground flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-sm font-semibold whitespace-nowrap no-underline transition-colors duration-200 sm:px-3",
-                    isActive && "bg-card text-foreground shadow-sm"
-                  )
-                }
+          <div className="flex items-center gap-2">
+            <div className="border-border/60 bg-muted/70 flex items-center gap-1 rounded-full border p-1">
+              {[
+                { to: "/", label: "Beranda", icon: HouseIcon, end: true },
+                { to: "/riwayat", label: "Riwayat", icon: HistoryIcon, end: false },
+                { to: "/admin", label: "Admin", icon: Settings, end: false },
+              ].map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  end={item.end}
+                  aria-label={item.label}
+                  className={({ isActive }) =>
+                    cn(
+                      "text-muted-foreground hover:text-foreground flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-sm font-semibold whitespace-nowrap no-underline transition-colors duration-200 sm:px-3",
+                      isActive && "bg-card text-foreground shadow-sm"
+                    )
+                  }
+                >
+                  <item.icon className="size-4 shrink-0" />
+                  <span className="hidden sm:inline">{item.label}</span>
+                </NavLink>
+              ))}
+            </div>
+            {isAdmin && adminToken && (
+              <Button
+                variant="destructive"
+                size="sm"
+                className="shrink-0 px-2.5 sm:px-4"
+                aria-label="Keluar"
+                title="Keluar"
+                onClick={clearAdminToken}
               >
-                <item.icon className="size-4 shrink-0" />
-                <span className="hidden sm:inline">{item.label}</span>
-              </NavLink>
-            ))}
+                <LogOut />
+                <span className="hidden sm:inline">Keluar</span>
+              </Button>
+            )}
           </div>
         </nav>
       </header>

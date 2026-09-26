@@ -69,7 +69,6 @@ import {
   Layers,
   Loader2,
   ListChecks,
-  LogOut,
   Package,
   Pencil,
   Plus,
@@ -81,6 +80,7 @@ import {
 } from "lucide-react";
 import QuizPackageDetail from "@/components/QuizPackageDetail";
 import { cn } from "@/lib/utils";
+import { clearAdminToken, setAdminToken, useAdminToken } from "@/lib/adminAuth";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 
 const OPTION_LETTERS = ["A", "B", "C", "D"];
@@ -153,19 +153,15 @@ function EmptyState({ icon: Icon, text }: { icon: LucideIcon; text: string }) {
 }
 
 // Desktop: form di kiri (sticky), daftar di kanan. Di bawah lg: bertumpuk.
-const SPLIT = "grid gap-4 lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)] lg:items-start";
+const SPLIT =
+  "grid gap-4 lg:grid-cols-[minmax(0,360px)_minmax(0,1fr)] lg:items-start 2xl:grid-cols-[minmax(0,420px)_minmax(0,1fr)]";
 // Form yang lebih tinggi dari layar scroll sendiri, supaya tombol simpan tidak
 // tersembunyi di bawah viewport selama daftar di sebelahnya panjang.
 const STICKY_FORM = "lg:sticky lg:top-20 lg:max-h-[calc(100dvh-6rem)] lg:overflow-y-auto";
 
-const TOKEN_KEY = "bank-soal-admin-token";
-
-function loadToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
-}
 
 export default function Admin() {
-  const [token, setToken] = useState<string | null>(() => loadToken());
+  const token = useAdminToken();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loginError, setLoginError] = useState<string | null>(null);
@@ -322,8 +318,7 @@ export default function Admin() {
       })
       .catch((e) => {
         if (e instanceof ApiError && (e.message.includes("login") || e.message.includes("admin"))) {
-          localStorage.removeItem(TOKEN_KEY);
-          setToken(null);
+          clearAdminToken();
         }
         setQmError(e instanceof ApiError ? e.message : "Gagal memuat paket soal.");
       })
@@ -554,8 +549,7 @@ export default function Admin() {
       .then(setMaterials)
       .catch((e) => {
         if (e instanceof ApiError && (e.message.includes("login") || e.message.includes("admin"))) {
-          localStorage.removeItem(TOKEN_KEY);
-          setToken(null);
+          clearAdminToken();
         }
         setListError(e instanceof ApiError ? e.message : "Gagal memuat materi.");
       });
@@ -571,8 +565,7 @@ export default function Admin() {
     setLoginError(null);
     try {
       const res = await loginAdmin(email, password);
-      localStorage.setItem(TOKEN_KEY, res.access_token);
-      setToken(res.access_token);
+      setAdminToken(res.access_token);
       setPassword("");
     } catch (e) {
       setLoginError(e instanceof ApiError ? e.message : "Gagal login. Coba lagi.");
@@ -872,11 +865,6 @@ export default function Admin() {
     }
   }
 
-  function logout() {
-    localStorage.removeItem(TOKEN_KEY);
-    setToken(null);
-  }
-
   if (!token) {
     return (
       <div className="relative flex min-h-[65vh] items-center justify-center overflow-hidden px-4 py-10">
@@ -940,7 +928,7 @@ export default function Admin() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-5">
+    <div className="flex w-full flex-col gap-5">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex items-center gap-3">
           <div className="animate-pop bg-secondary text-primary flex size-12 shrink-0 items-center justify-center rounded-2xl">
@@ -952,25 +940,11 @@ export default function Admin() {
               Kelola mata pelajaran, tipe ujian, materi, dan pool soal.
             </p>
           </div>
-          <Button
-            variant="outline"
-            className="ml-auto lg:hidden"
-            onClick={logout}
-          >
-            <LogOut />
-            Keluar
-          </Button>
         </div>
-        <div className="flex items-center gap-3">
-          <div className="grid flex-1 grid-cols-3 gap-2 lg:flex lg:flex-none">
-            <StatCard icon={BookOpen} label="Mata Pelajaran" value={subjects.length} />
-            <StatCard icon={ListChecks} label="Tipe Ujian" value={examTypes.length} delay={80} />
-            <StatCard icon={Layers} label="Materi" value={materials.length} delay={160} />
-          </div>
-          <Button variant="outline" className="hidden lg:inline-flex" onClick={logout}>
-            <LogOut />
-            Keluar
-          </Button>
+        <div className="grid grid-cols-3 gap-2 lg:flex">
+          <StatCard icon={BookOpen} label="Mata Pelajaran" value={subjects.length} />
+          <StatCard icon={ListChecks} label="Tipe Ujian" value={examTypes.length} delay={80} />
+          <StatCard icon={Layers} label="Materi" value={materials.length} delay={160} />
         </div>
       </div>
 
@@ -1050,7 +1024,7 @@ export default function Admin() {
               {subjects.length === 0 ? (
                 <EmptyState icon={BookOpen} text="Belum ada mata pelajaran." />
               ) : (
-                <div className="grid gap-2 sm:grid-cols-2">
+                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                   {subjects.map((s) => (
                     <div
                       key={s.id}
@@ -1281,13 +1255,13 @@ export default function Admin() {
               {examTypes.length === 0 ? (
                 <EmptyState icon={ListChecks} text="Belum ada tipe ujian." />
               ) : (
-                <div className="flex flex-col gap-2">
+                <div className="grid gap-2 xl:grid-cols-2">
                   {examTypes.map((t) =>
                     editingEtId === t.id && etEdit ? (
                       <form
                         key={t.id}
                         onSubmit={handleSaveExamTypeEdit}
-                        className="border-border/60 flex flex-col gap-3 rounded-xl border px-4 py-3.5 transition-all duration-200 hover:border-primary/40 hover:shadow-md"
+                        className="border-border/60 col-span-full flex flex-col gap-3 rounded-xl border px-4 py-3.5 transition-all duration-200 hover:border-primary/40 hover:shadow-md"
                       >
                         <div className="flex flex-col gap-2">
                           <Label htmlFor={`ete-name-${t.id}`}>Nama Tipe Ujian</Label>
@@ -1616,105 +1590,107 @@ export default function Admin() {
               {materials.length === 0 ? (
                 <EmptyState icon={FileText} text="Belum ada materi." />
               ) : (
-                materials.map((m) =>
-                  editingId === m.id ? (
-                    <div
-                      key={m.id}
-                      className="border-border/60 flex flex-col gap-3 rounded-xl border px-4 py-3.5 transition-all duration-200 hover:border-primary/40 hover:shadow-md"
-                    >
-                      <div className="flex flex-col gap-2">
-                        <Label htmlFor={`e-title-${m.id}`}>Judul</Label>
-                        <Input
-                          id={`e-title-${m.id}`}
-                          type="text"
-                          value={editTitle}
-                          onChange={(e) => setEditTitle(e.target.value)}
-                        />
-                      </div>
-                      <div className="flex flex-col gap-2">
-                        <Label htmlFor={`e-content-${m.id}`}>Isi Materi</Label>
-                        <Textarea
-                          id={`e-content-${m.id}`}
-                          dir="auto"
-                          value={editContent}
-                          onChange={(e) => setEditContent(e.target.value)}
-                        />
-                      </div>
-                      {editError && (
-                        <Alert variant="destructive">
-                          <AlertTriangle />
-                          <AlertDescription>{editError}</AlertDescription>
-                        </Alert>
-                      )}
-                      <div className="flex gap-2">
-                        <Button onClick={() => void handleSaveEditMaterial(m.id)}>Simpan</Button>
-                        <Button variant="outline" onClick={() => setEditingId(null)}>
-                          Batal
-                        </Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div
-                      key={m.id}
-                      className="border-border/60 flex items-center justify-between gap-3 rounded-xl border px-4 py-3 transition-all duration-200 hover:border-primary/40 hover:shadow-md"
-                    >
-                      <div className="flex min-w-0 items-center gap-3">
-                        <span className="bg-secondary text-primary flex size-9 shrink-0 items-center justify-center rounded-full">
-                          <FileText className="size-4" />
-                        </span>
-                        <div className="min-w-0 break-words">
-                          <strong className="font-bold">{m.title}</strong>
-                          {m.file_name && (
-                            <span className="text-muted-foreground">
-                              {" ("}
-                              {m.file_url ? (
-                                <a
-                                  href={m.file_url}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="underline"
-                                >
-                                  {m.file_name}
-                                </a>
-                              ) : (
-                                m.file_name
-                              )}
-                              {m.images.length > 0 && `, ${m.images.length} gambar`}
-                              {")"}
-                            </span>
-                          )}
-                          <div className="mt-1.5 flex flex-wrap gap-1.5">
-                            <Badge variant="secondary">{m.subject}</Badge>
-                            <Badge variant="secondary">Kelas {m.grade}</Badge>
-                            <Badge variant="secondary">{m.exam_types?.name ?? "-"}</Badge>
-                          </div>
+                <div className="grid gap-3 xl:grid-cols-2">
+                  {materials.map((m) =>
+                    editingId === m.id ? (
+                      <div
+                        key={m.id}
+                        className="border-border/60 col-span-full flex flex-col gap-3 rounded-xl border px-4 py-3.5 transition-all duration-200 hover:border-primary/40 hover:shadow-md"
+                      >
+                        <div className="flex flex-col gap-2">
+                          <Label htmlFor={`e-title-${m.id}`}>Judul</Label>
+                          <Input
+                            id={`e-title-${m.id}`}
+                            type="text"
+                            value={editTitle}
+                            onChange={(e) => setEditTitle(e.target.value)}
+                          />
+                        </div>
+                        <div className="flex flex-col gap-2">
+                          <Label htmlFor={`e-content-${m.id}`}>Isi Materi</Label>
+                          <Textarea
+                            id={`e-content-${m.id}`}
+                            dir="auto"
+                            value={editContent}
+                            onChange={(e) => setEditContent(e.target.value)}
+                          />
+                        </div>
+                        {editError && (
+                          <Alert variant="destructive">
+                            <AlertTriangle />
+                            <AlertDescription>{editError}</AlertDescription>
+                          </Alert>
+                        )}
+                        <div className="flex gap-2">
+                          <Button onClick={() => void handleSaveEditMaterial(m.id)}>Simpan</Button>
+                          <Button variant="outline" onClick={() => setEditingId(null)}>
+                            Batal
+                          </Button>
                         </div>
                       </div>
-                      <div className="flex shrink-0 gap-1.5">
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          className="size-8"
-                          aria-label={`Edit ${m.title}`}
-                          title="Edit"
-                          onClick={() => startEditMaterial(m)}
-                        >
-                          <Pencil />
-                        </Button>
-                        <Button
-                          variant="destructive"
-                          size="icon"
-                          className="size-8"
-                          aria-label={`Hapus ${m.title}`}
-                          title="Hapus"
-                          onClick={() => void handleDeleteMaterial(m.id)}
-                        >
-                          <Trash2 />
-                        </Button>
+                    ) : (
+                      <div
+                        key={m.id}
+                        className="border-border/60 flex items-center justify-between gap-3 rounded-xl border px-4 py-3 transition-all duration-200 hover:border-primary/40 hover:shadow-md"
+                      >
+                        <div className="flex min-w-0 items-center gap-3">
+                          <span className="bg-secondary text-primary flex size-9 shrink-0 items-center justify-center rounded-full">
+                            <FileText className="size-4" />
+                          </span>
+                          <div className="min-w-0 break-words">
+                            <strong className="font-bold">{m.title}</strong>
+                            {m.file_name && (
+                              <span className="text-muted-foreground">
+                                {" ("}
+                                {m.file_url ? (
+                                  <a
+                                    href={m.file_url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="underline"
+                                  >
+                                    {m.file_name}
+                                  </a>
+                                ) : (
+                                  m.file_name
+                                )}
+                                {m.images.length > 0 && `, ${m.images.length} gambar`}
+                                {")"}
+                              </span>
+                            )}
+                            <div className="mt-1.5 flex flex-wrap gap-1.5">
+                              <Badge variant="secondary">{m.subject}</Badge>
+                              <Badge variant="secondary">Kelas {m.grade}</Badge>
+                              <Badge variant="secondary">{m.exam_types?.name ?? "-"}</Badge>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 gap-1.5">
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="size-8"
+                            aria-label={`Edit ${m.title}`}
+                            title="Edit"
+                            onClick={() => startEditMaterial(m)}
+                          >
+                            <Pencil />
+                          </Button>
+                          <Button
+                            variant="destructive"
+                            size="icon"
+                            className="size-8"
+                            aria-label={`Hapus ${m.title}`}
+                            title="Hapus"
+                            onClick={() => void handleDeleteMaterial(m.id)}
+                          >
+                            <Trash2 />
+                          </Button>
+                        </div>
                       </div>
-                    </div>
-                  )
-                )
+                    )
+                  )}
+                </div>
               )}
             </CardContent>
           </Card>
@@ -1727,7 +1703,7 @@ export default function Admin() {
                 <RefreshCw className="size-5" />
                 <CardTitle>Paket Soal (Pool)</CardTitle>
               </div>
-              <CardDescription>
+              <CardDescription className="max-w-4xl">
                 Buat batch paket soal lebih dulu agar siswa bisa mengambil soal tanpa menunggu —
                 AI membuat paket sebanyak jumlah yang dipilih di bawah, memakai SEMUA materi untuk
                 kombinasi ini sebagai konteks. Reset Pool membuang paket yang belum dimulai (mis.
@@ -1744,7 +1720,7 @@ export default function Admin() {
                   </AlertDescription>
                 </Alert>
               )}
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 2xl:max-w-5xl">
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="r-subject">Mata Pelajaran</Label>
                   <Select value={resetSubject} onValueChange={setResetSubject}>
@@ -1863,7 +1839,7 @@ export default function Admin() {
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 xl:max-w-4xl">
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="qm-subject">Mata Pelajaran</Label>
                   <Select value={qmSubject} onValueChange={setQmSubject}>
@@ -1989,9 +1965,12 @@ export default function Admin() {
                   }
                 />
               ) : (
-                <div className="flex flex-col gap-2">
+                <div className="grid gap-2 xl:grid-cols-2">
                   {quizzes.map((q) => (
-                    <div key={q.id} className="flex flex-col gap-2">
+                    <div
+                      key={q.id}
+                      className={cn("flex flex-col gap-2", detailId === q.id && "col-span-full")}
+                    >
                       <div className="border-border/60 flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3 transition-all duration-200 hover:border-primary/40 hover:shadow-md">
                         <div className="flex min-w-0 items-center gap-3">
                           <input
